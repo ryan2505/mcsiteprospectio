@@ -1,0 +1,51 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    --background: 30 20% 99%;
+    --foreground: 20 14% 4%;
+
+    --card: 0 0% 100%;
+    --card-foreground: 20 14% 4%;
+
+    --primary: 17 80% 45%;
+    --primary-foreground: 0 0% 100%;
+
+    --muted: 30 20% 96%;
+    --muted-foreground: 20 8% 40%;
+
+    --accent: 17 70% 95%;
+    --accent-foreground: 17 80% 25%;
+
+    --border: 20 8% 88%;
+    --input: 20 8% 88%;
+    --ring: 17 80% 45%;
+
+    --radius: 0.75rem;
+
+    --font-sans: "Inter", "DM Sans", system-ui, sans-serif;
+  }
+
+  * {
+    @apply border-border;
+  }
+
+  body {
+    @apply bg-background text-foreground antialiased;
+    font-feature-settings: "rlig" 1, "calt" 1;
+  }
+
+  ::selection {
+    @apply bg-primary/20;
+  }
+}
+
+/* Gradient utility */
+.bg-hero-gradient {
+  background:
+    radial-gradient(60% 60% at 20% 0%, hsl(17 80% 95%) 0%, transparent 60%),
+    radial-gradient(40% 40% at 100% 100%, hsl(35 80% 95%) 0%, transparent 50%),
+    hsl(30 20% 99%);
+}
