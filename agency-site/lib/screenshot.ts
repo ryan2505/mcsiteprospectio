@@ -13,7 +13,10 @@
  * Pour passer à une solution premium plus tard (ScreenshotOne, etc.),
  * il suffit de changer cette fonction.
  */
-export function screenshotUrl(target: string, width = 1000): string {
+export function screenshotUrl(target: string, width = 1000, cropHeight?: number): string {
   const clean = target.trim();
+  if (cropHeight) {
+    return `https://image.thum.io/get/width/${width}/crop/${cropHeight}/noanimate/${clean}`;
+  }
   return `https://image.thum.io/get/width/${width}/noanimate/${clean}`;
 }

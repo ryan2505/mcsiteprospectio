@@ -17,6 +17,11 @@ export type AuditResult = {
   angle_pitch: string;
   type_business: string;
   ton_recommande: string;
+  // Identité de marque détectée (sert à adapter le hero généré)
+  langue: string; // "fr", "en", ...
+  couleurs: string[]; // codes hex détectés, ex: ["#1a1a1a", "#c0392b"]
+  style: string; // ex: "moderne", "classique", "luxe", "coloré"
+  ton: string; // ex: "chaleureux", "premium", "corporate"
 };
 
 export function isAnthropicConfigured(): boolean {
@@ -67,12 +72,18 @@ Analyse le site et renvoie UNIQUEMENT un JSON valide (aucun texte autour, pas de
   "problemes": [<3 chaînes max, en français simple, sans jargon technique>],
   "angle_pitch": "<1 phrase concrète sur ce que ce site fait perdre comme business, ex: 'Tu perds des réservations car aucun bouton WhatsApp visible'>",
   "type_business": "<ex: restaurant, hôtel, salon, autre>",
-  "ton_recommande": "<'amical' ou 'formel'>"
+  "ton_recommande": "<'amical' ou 'formel'>",
+  "langue": "<code langue principale du site: 'fr', 'en', 'pt'...>",
+  "couleurs": [<2 à 4 codes couleur HEX représentant l'identité de marque actuelle, ex: '#0b3d2e'. Déduis-les du HTML/CSS si possible, sinon propose une palette cohérente avec le secteur>],
+  "style": "<style visuel actuel: 'moderne' | 'classique' | 'luxe' | 'minimaliste' | 'coloré' | 'daté'>",
+  "ton": "<ton de marque: 'chaleureux' | 'premium' | 'décontracté' | 'corporate' | 'familial'>"
 }
 
 Règles :
 - Pense MOBILE FIRST (90% du trafic est mobile en Afrique).
 - Score > 70 = site déjà correct. Score < 50 = grosse opportunité.
+- "langue" = la langue dans laquelle le site (et donc les futurs textes) doit être rédigé.
+- "couleurs" = l'ADN visuel à préserver/sublimer, pas à jeter.
 - Sois sévère mais juste.`;
 
 /** Appelle Claude et renvoie l'audit parsé. */
@@ -135,5 +146,11 @@ function parseAuditJson(raw: string): AuditResult {
     angle_pitch: String(obj.angle_pitch ?? ""),
     type_business: String(obj.type_business ?? ""),
     ton_recommande: String(obj.ton_recommande ?? "amical"),
+    langue: String(obj.langue ?? "fr").slice(0, 5),
+    couleurs: Array.isArray(obj.couleurs)
+      ? obj.couleurs.slice(0, 4).map(String)
+      : [],
+    style: String(obj.style ?? "moderne"),
+    ton: String(obj.ton ?? "chaleureux"),
   };
 }

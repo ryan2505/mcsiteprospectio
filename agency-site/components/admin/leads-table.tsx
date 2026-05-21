@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useMemo } from "react";
 import { useRouter } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import {
@@ -21,7 +21,32 @@ import {
   Instagram,
   Linkedin,
   Download,
+  Wand2,
+  CheckCheck,
 } from "lucide-react";
+
+const TABS = [
+  { key: "tous",      label: "Tous" },
+  { key: "nouveaux",  label: "À auditer" },
+  { key: "audites",   label: "Audités" },
+  { key: "heroes",    label: "Hero prêts" },
+  { key: "messages",  label: "Messages prêts" },
+  { key: "envoyes",   label: "Envoyés" },
+] as const;
+type Tab = typeof TABS[number]["key"];
+
+const SENT_STATUSES = ["envoyé", "répondu", "rdv", "client"];
+
+function filterLeads(leads: Lead[], tab: Tab): Lead[] {
+  switch (tab) {
+    case "nouveaux":  return leads.filter((l) => l.score_global == null);
+    case "audites":   return leads.filter((l) => l.score_global != null);
+    case "heroes":    return leads.filter((l) => l.landing_url != null);
+    case "messages":  return leads.filter((l) => l.whatsapp_message != null);
+    case "envoyes":   return leads.filter((l) => SENT_STATUSES.includes(l.status ?? ""));
+    default:          return leads;
+  }
+}
 
 export type Lead = {
   id: string;
@@ -43,6 +68,7 @@ export type Lead = {
   angle_pitch: string | null;
   landing_url: string | null;
   whatsapp_message: string | null;
+  build_prompt: string | null;
   status: string | null;
 };
 
@@ -94,6 +120,151 @@ function loadHtml2Canvas(): Promise<Html2Canvas> {
   });
 }
 
+/** Rend le hero (/preview/<id>) dans un iframe invisible et renvoie un dataURL PNG (hauteur complète). */
+async function renderHeroDataUrl(leadId: string): Promise<string> {
+  const h2c = await loadHtml2Canvas();
+  const iframe = document.createElement("iframe");
+  iframe.style.position = "fixed";
+  iframe.style.left = "-10000px";
+  iframe.style.top = "0";
+  iframe.width = "1200";
+  iframe.height = "900";
+  iframe.src = `/preview/${leadId}`;
+  document.body.appendChild(iframe);
+  try {
+    await new Promise<void>((resolve, reject) => {
+      const to = setTimeout(() => reject(new Error("Chargement du hero trop long")), 20000);
+      iframe.onload = () => {
+        clearTimeout(to);
+        resolve();
+      };
+    });
+    await new Promise((r) => setTimeout(r, 2800)); // attendre les animations CSS
+    const doc = iframe.contentDocument;
+    if (!doc) throw new Error("Impossible d'accéder au rendu du hero.");
+
+    // Mesurer la hauteur réelle du hero pour tout capturer
+    const fullH = Math.max(
+      doc.body.scrollHeight,
+      doc.body.offsetHeight,
+      doc.documentElement.scrollHeight,
+      760
+    );
+    iframe.height = String(fullH);
+    await new Promise((r) => setTimeout(r, 300)); // attendre le reflow
+
+    const canvas = await h2c(doc.body, {
+      useCORS: true,
+      allowTaint: false,
+      backgroundColor: null,
+      width: 1200,
+      height: fullH,
+      windowWidth: 1200,
+      windowHeight: fullH,
+      scale: 1.5,
+    });
+    return canvas.toDataURL("image/png");
+  } finally {
+    document.body.removeChild(iframe);
+  }
+}
+
+function loadImage(src: string): Promise<HTMLImageElement> {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    img.crossOrigin = "anonymous";
+    img.onload = () => resolve(img);
+    img.onerror = () => reject(new Error("Image non chargée"));
+    img.src = src;
+  });
+}
+
+function drawCover(
+  ctx: CanvasRenderingContext2D,
+  img: HTMLImageElement,
+  x: number,
+  y: number,
+  w: number,
+  h: number
+) {
+  const ir = img.width / img.height;
+  const r = w / h;
+  let sw = img.width;
+  let sh = img.height;
+  let sx = 0;
+  let sy = 0;
+  if (ir > r) {
+    sw = img.height * r;
+    sx = (img.width - sw) / 2;
+  } else {
+    sh = img.width / r;
+    sy = (img.height - sh) / 2;
+  }
+  ctx.drawImage(img, sx, sy, sw, sh, x, y, w, h);
+}
+
+/** Compose une image comparative AVANT/APRÈS et renvoie un dataURL PNG. */
+function composeComparison(
+  before: HTMLImageElement | null,
+  after: HTMLImageElement,
+  title: string
+): string {
+  const W = 1600;
+  const H = 760;
+  const pad = 24;
+  const header = 70;
+  const panelW = (W - pad * 3) / 2;
+  const panelY = header + pad;
+  const panelH = H - panelY - pad;
+
+  const canvas = document.createElement("canvas");
+  canvas.width = W;
+  canvas.height = H;
+  const ctx = canvas.getContext("2d")!;
+
+  // Fond
+  ctx.fillStyle = "#faf7f5";
+  ctx.fillRect(0, 0, W, H);
+
+  // Titre
+  ctx.fillStyle = "#1c1917";
+  ctx.font = "bold 30px Inter, system-ui, sans-serif";
+  ctx.textBaseline = "middle";
+  ctx.fillText(title, pad, header / 2 + 6);
+
+  const panels: Array<{ x: number; label: string; color: string; img: HTMLImageElement | null }> = [
+    { x: pad, label: "AVANT", color: "#dc2626", img: before },
+    { x: pad * 2 + panelW, label: "APRÈS", color: "#16a34a", img: after },
+  ];
+
+  for (const p of panels) {
+    // Cadre
+    ctx.fillStyle = "#e7e5e4";
+    ctx.fillRect(p.x, panelY, panelW, panelH);
+    // Image
+    if (p.img) {
+      ctx.save();
+      ctx.beginPath();
+      ctx.rect(p.x, panelY, panelW, panelH);
+      ctx.clip();
+      drawCover(ctx, p.img, p.x, panelY, panelW, panelH);
+      ctx.restore();
+    } else {
+      ctx.fillStyle = "#a8a29e";
+      ctx.font = "16px Inter, sans-serif";
+      ctx.fillText("Aperçu indisponible", p.x + 20, panelY + 30);
+    }
+    // Bandeau label
+    ctx.fillStyle = p.color;
+    ctx.fillRect(p.x, panelY, 130, 34);
+    ctx.fillStyle = "#fff";
+    ctx.font = "bold 16px Inter, sans-serif";
+    ctx.fillText(p.label, p.x + 16, panelY + 18);
+  }
+
+  return canvas.toDataURL("image/png");
+}
+
 export function LeadsTable({ leads }: { leads: Lead[] }) {
   const router = useRouter();
   const [busy, setBusy] = useState<{ id: string; action: string } | null>(null);
@@ -101,8 +272,25 @@ export function LeadsTable({ leads }: { leads: Lead[] }) {
   const [error, setError] = useState<string | null>(null);
   const [capturingId, setCapturingId] = useState<string | null>(null);
   const [shots, setShots] = useState<Record<string, string>>({});
+  const [comparingId, setComparingId] = useState<string | null>(null);
+  const [comparisons, setComparisons] = useState<Record<string, string>>({});
+  const [activeTab, setActiveTab] = useState<Tab>("tous");
 
-  async function runAction(id: string, action: "audit" | "landing" | "message") {
+  const tabCounts = useMemo(() => ({
+    tous:     leads.length,
+    nouveaux: leads.filter((l) => l.score_global == null).length,
+    audites:  leads.filter((l) => l.score_global != null).length,
+    heroes:   leads.filter((l) => l.landing_url != null).length,
+    messages: leads.filter((l) => l.whatsapp_message != null).length,
+    envoyes:  leads.filter((l) => SENT_STATUSES.includes(l.status ?? "")).length,
+  }), [leads]);
+
+  const filteredLeads = useMemo(() => filterLeads(leads, activeTab), [leads, activeTab]);
+
+  async function runAction(
+    id: string,
+    action: "audit" | "landing" | "message" | "buildprompt" | "mark-sent"
+  ) {
     setBusy({ id, action });
     setError(null);
     try {
@@ -132,45 +320,11 @@ export function LeadsTable({ leads }: { leads: Lead[] }) {
   }
 
   // Capture du hero DANS le navigateur (fonctionne en local, sans service externe).
-  async function captureHero(id: string, nom: string) {
+  async function captureHero(id: string) {
     setCapturingId(id);
     setError(null);
-    let iframe: HTMLIFrameElement | null = null;
     try {
-      const h2c = await loadHtml2Canvas();
-      iframe = document.createElement("iframe");
-      iframe.style.position = "fixed";
-      iframe.style.left = "-10000px";
-      iframe.style.top = "0";
-      iframe.width = "1200";
-      iframe.height = "760";
-      iframe.src = `/preview/${id}`;
-      document.body.appendChild(iframe);
-
-      // Attendre le chargement de la page + un délai pour images/polices.
-      await new Promise<void>((resolve, reject) => {
-        const to = setTimeout(() => reject(new Error("Chargement du hero trop long")), 20000);
-        iframe!.onload = () => {
-          clearTimeout(to);
-          resolve();
-        };
-      });
-      await new Promise((r) => setTimeout(r, 2800));
-
-      const doc = iframe.contentDocument;
-      if (!doc) throw new Error("Impossible d'accéder au rendu du hero.");
-
-      const canvas = await h2c(doc.body, {
-        useCORS: true,
-        allowTaint: false,
-        backgroundColor: null,
-        width: 1200,
-        height: 760,
-        windowWidth: 1200,
-        windowHeight: 760,
-        scale: 1.5,
-      });
-      const dataUrl = canvas.toDataURL("image/png");
+      const dataUrl = await renderHeroDataUrl(id);
       setShots((s) => ({ ...s, [id]: dataUrl }));
     } catch (e) {
       setError(
@@ -178,8 +332,38 @@ export function LeadsTable({ leads }: { leads: Lead[] }) {
           " — réessaie, ou utilise « Voir le hero » puis Win+Shift+S."
       );
     } finally {
-      if (iframe) document.body.removeChild(iframe);
       setCapturingId(null);
+    }
+  }
+
+  // Capture du comparatif AVANT/APRÈS (avant via proxy /api/shot, après = hero).
+  async function captureComparison(l: Lead) {
+    setComparingId(l.id);
+    setError(null);
+    try {
+      const afterUrl = shots[l.id] ?? (await renderHeroDataUrl(l.id));
+      if (!shots[l.id]) setShots((s) => ({ ...s, [l.id]: afterUrl }));
+      const afterImg = await loadImage(afterUrl);
+
+      let beforeImg: HTMLImageElement | null = null;
+      if (l.site_web) {
+        try {
+          // crop=700 → juste la hero section (above the fold) du site précédent
+          beforeImg = await loadImage(`/api/shot?url=${encodeURIComponent(l.site_web)}&crop=700`);
+        } catch {
+          beforeImg = null; // panneau "avant" laissé vide si la capture échoue
+        }
+      }
+
+      const composite = composeComparison(beforeImg, afterImg, l.nom);
+      setComparisons((c) => ({ ...c, [l.id]: composite }));
+    } catch (e) {
+      setError(
+        (e instanceof Error ? e.message : "Erreur de comparatif") +
+          " — réessaie dans un instant."
+      );
+    } finally {
+      setComparingId(null);
     }
   }
 
@@ -197,18 +381,52 @@ export function LeadsTable({ leads }: { leads: Lead[] }) {
 
   return (
     <div className="space-y-4">
+      {/* Tabs de catégories */}
+      <div className="flex flex-wrap gap-1 rounded-xl border border-border bg-muted/30 p-1">
+        {TABS.map((tab) => (
+          <button
+            key={tab.key}
+            onClick={() => setActiveTab(tab.key)}
+            className={`flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-sm font-medium transition-colors ${
+              activeTab === tab.key
+                ? "bg-background text-foreground shadow-sm"
+                : "text-muted-foreground hover:text-foreground"
+            }`}
+          >
+            {tab.label}
+            <span
+              className={`rounded-full px-1.5 py-0.5 text-xs font-bold ${
+                activeTab === tab.key
+                  ? "bg-primary text-primary-foreground"
+                  : "bg-muted text-muted-foreground"
+              }`}
+            >
+              {tabCounts[tab.key]}
+            </span>
+          </button>
+        ))}
+      </div>
+
       {error && (
         <p className="rounded-lg bg-red-50 px-4 py-2 text-sm text-red-700">
           {error}
         </p>
       )}
+
+      {filteredLeads.length === 0 && (
+        <div className="rounded-2xl border border-dashed border-border bg-muted/30 p-8 text-center text-sm text-muted-foreground">
+          Aucun lead dans cette catégorie.
+        </div>
+      )}
+
       <div className="grid gap-4">
-        {leads.map((l) => {
+        {filteredLeads.map((l) => {
           const wa = waDigits(l.telephone);
           const waHref = l.whatsapp_message
             ? `https://wa.me/${wa}?text=${encodeURIComponent(l.whatsapp_message)}`
             : `https://wa.me/${wa}`;
           const shot = shots[l.id];
+          const comparison = comparisons[l.id];
           return (
             <div
               key={l.id}
@@ -324,12 +542,23 @@ export function LeadsTable({ leads }: { leads: Lead[] }) {
                       <img src={shot} alt={`Hero ${l.nom}`} className="w-full" />
                     </div>
                   )}
+                  {comparison && (
+                    <div className="mt-3">
+                      <div className="mb-1 text-xs font-medium text-muted-foreground">
+                        Comparatif avant / après
+                      </div>
+                      <div className="overflow-hidden rounded-lg border border-border">
+                        {/* eslint-disable-next-line @next/next/no-img-element */}
+                        <img src={comparison} alt={`Comparatif ${l.nom}`} className="w-full" />
+                      </div>
+                    </div>
+                  )}
 
                   <div className="mt-3 flex flex-wrap gap-2">
                     <Button
                       size="sm"
-                      onClick={() => captureHero(l.id, l.nom)}
-                      disabled={capturingId === l.id}
+                      onClick={() => captureHero(l.id)}
+                      disabled={capturingId === l.id || comparingId === l.id}
                     >
                       {capturingId === l.id ? (
                         <>
@@ -339,7 +568,7 @@ export function LeadsTable({ leads }: { leads: Lead[] }) {
                       ) : (
                         <>
                           <Images className="h-3.5 w-3.5" />
-                          {shot ? "Recapturer" : "Capturer le visuel"}
+                          {shot ? "Recapturer hero" : "Capturer le hero"}
                         </>
                       )}
                     </Button>
@@ -347,7 +576,34 @@ export function LeadsTable({ leads }: { leads: Lead[] }) {
                       <Button asChild size="sm" variant="outline">
                         <a href={shot} download={`hero-${slugify(l.nom)}.png`}>
                           <Download className="h-3.5 w-3.5" />
-                          Télécharger
+                          Télécharger hero
+                        </a>
+                      </Button>
+                    )}
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      onClick={() => captureComparison(l)}
+                      disabled={comparingId === l.id || capturingId === l.id}
+                      title="Génère une image avant/après à envoyer sur WhatsApp"
+                    >
+                      {comparingId === l.id ? (
+                        <>
+                          <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                          Comparatif…
+                        </>
+                      ) : (
+                        <>
+                          <Images className="h-3.5 w-3.5" />
+                          {comparison ? "Recapturer comparatif" : "Capturer comparatif"}
+                        </>
+                      )}
+                    </Button>
+                    {comparison && (
+                      <Button asChild size="sm" variant="outline">
+                        <a href={comparison} download={`comparatif-${slugify(l.nom)}.png`}>
+                          <Download className="h-3.5 w-3.5" />
+                          Télécharger comparatif
                         </a>
                       </Button>
                     )}
@@ -355,12 +611,6 @@ export function LeadsTable({ leads }: { leads: Lead[] }) {
                       <a href={`/preview/${l.id}`} target="_blank" rel="noopener noreferrer">
                         <Eye className="h-3.5 w-3.5" />
                         Voir le hero
-                      </a>
-                    </Button>
-                    <Button asChild size="sm" variant="ghost">
-                      <a href={`/compare/${l.id}`} target="_blank" rel="noopener noreferrer">
-                        <Images className="h-3.5 w-3.5" />
-                        Comparatif
                       </a>
                     </Button>
                   </div>
@@ -407,6 +657,22 @@ export function LeadsTable({ leads }: { leads: Lead[] }) {
                           <Send className="h-3.5 w-3.5" />
                           Ouvrir WhatsApp
                         </a>
+                      </Button>
+                    )}
+                    {!SENT_STATUSES.includes(l.status ?? "") && (
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        onClick={() => runAction(l.id, "mark-sent")}
+                        disabled={!!busy}
+                        title="Marquer ce lead comme message envoyé"
+                      >
+                        {isBusy(l.id, "mark-sent") ? (
+                          <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                        ) : (
+                          <CheckCheck className="h-3.5 w-3.5" />
+                        )}
+                        Marquer envoyé
                       </Button>
                     )}
                   </div>
@@ -466,7 +732,54 @@ export function LeadsTable({ leads }: { leads: Lead[] }) {
                   )}
                   {l.whatsapp_message ? "Régénérer message" : "Message"}
                 </Button>
+
+                <Button
+                  size="sm"
+                  variant="outline"
+                  onClick={() => runAction(l.id, "buildprompt")}
+                  disabled={!!busy}
+                  title="Générer un prompt prêt pour V0/Lovable/Bolt"
+                >
+                  {isBusy(l.id, "buildprompt") ? (
+                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                  ) : (
+                    <Wand2 className="h-3.5 w-3.5" />
+                  )}
+                  {l.build_prompt ? "Régénérer prompt" : "Prompt de site"}
+                </Button>
               </div>
+
+              {/* Prompt de build (à coller dans V0 / Lovable / Bolt) */}
+              {l.build_prompt && (
+                <div className="mt-4 rounded-lg border border-primary/30 bg-primary/5 p-4">
+                  <div className="flex items-center justify-between gap-2">
+                    <div className="flex items-center gap-2 text-xs font-semibold text-primary">
+                      <Wand2 className="h-4 w-4" />
+                      Prompt optimisé (V0 / Lovable / Bolt)
+                    </div>
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      onClick={() => copyMessage(l.id, l.build_prompt!)}
+                    >
+                      {copiedId === l.id ? (
+                        <>
+                          <Check className="h-3.5 w-3.5" />
+                          Copié
+                        </>
+                      ) : (
+                        <>
+                          <Copy className="h-3.5 w-3.5" />
+                          Copier le prompt
+                        </>
+                      )}
+                    </Button>
+                  </div>
+                  <pre className="mt-3 max-h-64 overflow-auto whitespace-pre-wrap rounded-md bg-background p-3 text-xs leading-relaxed">
+{l.build_prompt}
+                  </pre>
+                </div>
+              )}
             </div>
           );
         })}

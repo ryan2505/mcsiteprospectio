@@ -80,6 +80,7 @@ create table if not exists leads (
   landing_generated_at timestamptz,
   whatsapp_message text,
   message_generated_at timestamptz,
+  build_prompt text,
 
   -- Suivi commercial
   status text default 'nouveau',
@@ -109,3 +110,32 @@ alter table leads add column if not exists message_generated_at timestamptz;
 alter table leads add column if not exists facebook text;
 alter table leads add column if not exists instagram text;
 alter table leads add column if not exists linkedin text;
+alter table leads add column if not exists build_prompt text;
+
+-- ============================================================
+-- AUTOMATISATION — table d'état du pipeline
+-- Exécute ce bloc si tu ajoutes l'automatisation à un projet existant.
+-- ============================================================
+create table if not exists automation_state (
+  id            integer     primary key default 1,
+  status        text        not null default 'idle', -- idle | running | paused
+  service_type  text,
+  ville         text,
+  pays          text        default 'Cameroun',
+  keywords_pool text[]      default '{}',
+  keywords_done text[]      default '{}',
+  current_keyword text,
+  scrape_run_id text,
+  calendly_url  text        default 'https://calendly.com/kountchouryan/30min',
+  batch_size    integer     default 5,
+  leads_processed integer   default 0,
+  last_batch_at timestamptz,
+  started_at    timestamptz,
+  log           jsonb       default '[]'::jsonb
+);
+
+-- Ligne de config unique (singleton)
+insert into automation_state (id) values (1) on conflict do nothing;
+
+-- Pas d'accès public — uniquement via service_role (API routes server-side)
+alter table automation_state enable row level security;

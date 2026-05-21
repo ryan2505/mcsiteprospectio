@@ -18,36 +18,79 @@ export type LeadForMessage = {
   nb_avis: number | null;
   score_global: number | null;
   angle_pitch: string | null;
+  problemes?: string[] | null;
 };
 
-const MESSAGE_PROMPT = (lead: LeadForMessage) => `Tu es expert en prospection WhatsApp pour le marché africain francophone.
+export type MessageOptions = {
+  previewUrl?: string;
+  calendlyUrl?: string;
+};
+
+const MESSAGE_PROMPT = (lead: LeadForMessage, opts?: MessageOptions) => {
+  const hasExtra = opts?.previewUrl || opts?.calendlyUrl;
+  const majorProblem = lead.problemes?.[0] ?? lead.angle_pitch ?? "site web à moderniser";
+
+  if (hasExtra) {
+    return `Tu es expert en prospection WhatsApp pour le marché africain francophone.
 
 Contexte sur le prospect :
 - Établissement : ${lead.nom}
 - Type : ${lead.type_business ?? "commerce local"}
 - Ville : ${lead.ville ?? ""}
 - Score actuel du site : ${lead.score_global ?? "?"}/100
-- Problème principal / angle : ${lead.angle_pitch ?? "site obsolète"}
+- Problème principal : ${majorProblem}
+- Note Google : ${lead.note_google ?? "?"}/5 (${lead.nb_avis ?? 0} avis)
+${opts?.previewUrl ? `- Lien aperçu du nouveau hero : ${opts.previewUrl}` : ""}
+${opts?.calendlyUrl ? `- Lien calendly : ${opts.calendlyUrl}` : ""}
+
+Rédige un message WhatsApp en français qui :
+1. Commence par "Bonjour l'équipe de ${lead.nom}" (ou prénom gérant si connu).
+2. Mentionne UN détail spécifique de l'établissement (note Google, type, etc.).
+3. Pose UN constat factuel (pas accusateur) sur leur site — problème précis.
+4. Annonce qu'on a préparé leur nouvelle page GRATUITEMENT${opts?.previewUrl ? ` et donne le lien directement : ${opts.previewUrl}` : ""}.
+5. Propose un call de 30 min sans engagement${opts?.calendlyUrl ? ` avec ce lien : ${opts.calendlyUrl}` : ""}.
+6. Termine par une question courte ("Ça vous intéresse ?").
+
+Règles STRICTES :
+- 100 mots MAXIMUM.
+- Vouvoiement par défaut ; tutoiement seulement si type = lounge/bar.
+- 1 emoji maximum, naturel.
+- INTERDITS : "optimisation", "conversion", "ROI", "doublez vos ventes", "j'espère".
+- Inclus les liens tels quels dans le texte (ne les reformule pas).
+
+Renvoie UNIQUEMENT le texte du message, rien d'autre.`;
+  }
+
+  return `Tu es expert en prospection WhatsApp pour le marché africain francophone.
+
+Contexte sur le prospect :
+- Établissement : ${lead.nom}
+- Type : ${lead.type_business ?? "commerce local"}
+- Ville : ${lead.ville ?? ""}
+- Score actuel du site : ${lead.score_global ?? "?"}/100
+- Problème principal / angle : ${majorProblem}
 - Note Google : ${lead.note_google ?? "?"}/5 (${lead.nb_avis ?? 0} avis)
 
 Rédige un message WhatsApp en français qui :
-1. Commence par "Bonjour l'équipe de ${lead.nom}" (ou le prénom du gérant si connu, sinon l'équipe).
-2. Mentionne UN détail spécifique prouvant qu'on a regardé leur établissement (note Google, type, etc.).
+1. Commence par "Bonjour l'équipe de ${lead.nom}".
+2. Mentionne UN détail spécifique prouvant qu'on a regardé leur établissement.
 3. Pose UN constat factuel (pas accusateur) sur leur site actuel.
 4. Annonce qu'on a déjà préparé une version améliorée, GRATUITE à voir.
 5. Termine par UNE question fermée simple ("Je peux vous la montrer ?").
 
 Règles STRICTES :
 - 70 mots MAXIMUM.
-- Ton respectueux et direct. Vouvoiement par défaut ; tutoiement seulement si type = lounge/bar.
+- Vouvoiement par défaut ; tutoiement seulement si type = lounge/bar.
 - 1 emoji maximum, naturel. Pas d'emoji corporate.
 - INTERDITS : "optimisation", "conversion", "ROI", "doublez vos ventes", "j'espère que vous allez bien".
 - Pas de promesse magique.
 
 Renvoie UNIQUEMENT le texte du message, rien d'autre (pas de guillemets autour, pas d'explication).`;
+};
 
 export async function generateWhatsAppMessage(
-  lead: LeadForMessage
+  lead: LeadForMessage,
+  opts?: MessageOptions
 ): Promise<string> {
   if (!ANTHROPIC_API_KEY) {
     throw new Error("ANTHROPIC_API_KEY manquant.");
@@ -63,7 +106,7 @@ export async function generateWhatsAppMessage(
     body: JSON.stringify({
       model: ANTHROPIC_MODEL,
       max_tokens: 512,
-      messages: [{ role: "user", content: MESSAGE_PROMPT(lead) }],
+      messages: [{ role: "user", content: MESSAGE_PROMPT(lead, opts) }],
     }),
   });
 
@@ -77,6 +120,5 @@ export async function generateWhatsAppMessage(
   };
   const raw = data.content?.find((c) => c.type === "text")?.text ?? "";
 
-  // Nettoyage : retire d'éventuels guillemets entourant tout le message.
   return raw.trim().replace(/^["«»\s]+|["«»\s]+$/g, "");
 }

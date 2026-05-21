@@ -1,0 +1,294 @@
+/**
+ * Traite UN lead à la fois dans le pipeline complet :
+ *   audit → hero (landing) → screenshots (thum.io) → message (avec preview + calendly)
+ *
+ * Appelé en boucle par l'interface d'automatisation.
+ * Renvoie : { status: "processed"|"scraping"|"done"|"error"|"idle", ... }
+ */
+import { NextResponse } from "next/server";
+import { getState, updateState, addLog } from "@/lib/automation";
+import { supabaseAdmin } from "@/lib/supabase";
+import { auditSite } from "@/lib/audit";
+import { generateLandingHtml } from "@/lib/landing";
+import { generateWhatsAppMessage } from "@/lib/message";
+import { getScrapeResults, startScrape, isApifyConfigured } from "@/lib/apify";
+import type { ScrapedPlace } from "@/lib/apify";
+import type { AuditResult } from "@/lib/audit";
+
+export const runtime = "nodejs";
+export const maxDuration = 60;
+
+export async function POST() {
+  const state = await getState();
+  if (!state || state.status !== "running") {
+    return NextResponse.json({ status: state?.status ?? "idle", skip: true });
+  }
+
+  // ── 1. Vérifier le scraping Apify en cours ──────────────────────────────
+  if (state.scrape_run_id) {
+    try {
+      const result = await getScrapeResults(state.scrape_run_id);
+      if (result.finished) {
+        if (result.succeeded) {
+          const inserted = await insertLeads(
+            result.places,
+            state.current_keyword,
+            state.ville,
+            state.pays
+          );
+          await updateState({ scrape_run_id: null });
+          await addLog(
+            `Scraping "${state.current_keyword}" terminé : ${inserted} nouveau(x) lead(s)`,
+            "ok"
+          );
+        } else {
+          await updateState({ scrape_run_id: null });
+          await addLog(
+            `Scraping "${state.current_keyword}" échoué (${result.status}) — on continue avec les leads existants`,
+            "error"
+          );
+        }
+      } else {
+        return NextResponse.json({
+          status: "scraping",
+          runId: state.scrape_run_id,
+          keyword: state.current_keyword,
+        });
+      }
+    } catch (e) {
+      await updateState({ scrape_run_id: null });
+      await addLog(
+        `Erreur vérification scraping : ${e instanceof Error ? e.message : "?"}`,
+        "error"
+      );
+    }
+  }
+
+  // ── 2. Récupérer le prochain lead à traiter ─────────────────────────────
+  const { data: rows } = await supabaseAdmin!
+    .from("leads")
+    .select(
+      "id, nom, type_business, ville, pays, telephone, site_web, note_google, nb_avis, audit_json, score_global, angle_pitch, problemes"
+    )
+    .is("score_global", null)
+    .eq("status", "nouveau")
+    .order("created_at", { ascending: true })
+    .limit(1);
+
+  const lead = rows?.[0] as {
+    id: string;
+    nom: string;
+    type_business: string | null;
+    ville: string | null;
+    pays: string | null;
+    telephone: string | null;
+    site_web: string | null;
+    note_google: number | null;
+    nb_avis: number | null;
+    audit_json: Record<string, unknown> | null;
+    score_global: number | null;
+    angle_pitch: string | null;
+    problemes: string[] | null;
+  } | undefined;
+
+  // ── 3. Plus de leads → passer au mot-clé suivant ───────────────────────
+  if (!lead) {
+    const nextKeyword = state.keywords_pool?.[0] ?? null;
+    if (!nextKeyword) {
+      await updateState({ status: "idle" });
+      await addLog("Tous les mots-clés traités — automatisation terminée 🎉", "ok");
+      return NextResponse.json({ status: "done" });
+    }
+
+    let runId: string | null = null;
+    if (isApifyConfigured()) {
+      try {
+        runId = await startScrape(nextKeyword, {
+          maxResults: 25,
+          countryCode: state.pays?.toLowerCase() === "cameroun" ? "cm" : undefined,
+        });
+      } catch (e) {
+        await addLog(
+          `Erreur démarrage scraping "${nextKeyword}" : ${e instanceof Error ? e.message : "?"}`,
+          "error"
+        );
+      }
+    }
+
+    await updateState({
+      current_keyword: nextKeyword,
+      scrape_run_id: runId,
+      keywords_pool: state.keywords_pool.slice(1),
+      keywords_done: [...(state.keywords_done ?? []), nextKeyword],
+    });
+    await addLog(
+      runId
+        ? `Nouveau mot-clé : "${nextKeyword}" — scraping lancé`
+        : `Nouveau mot-clé : "${nextKeyword}" — traitement leads existants`,
+      "info"
+    );
+    return NextResponse.json({
+      status: runId ? "scraping" : "processing",
+      keyword: nextKeyword,
+      runId,
+    });
+  }
+
+  // ── 4. Traiter le lead : audit → hero → message ─────────────────────────
+  const appUrl = (process.env.APP_URL ?? "").replace(/\/$/, "");
+  const previewUrl = appUrl ? `${appUrl}/preview/${lead.id}` : null;
+
+  try {
+    await addLog(`Traitement de "${lead.nom}"…`, "info");
+
+    // — Audit —
+    let auditResult: Partial<AuditResult> = {};
+    if (lead.site_web) {
+      auditResult = await auditSite(lead.site_web);
+      await supabaseAdmin!
+        .from("leads")
+        .update({
+          audit_json: auditResult,
+          score_global: auditResult.score_global,
+          score_design: (auditResult as Record<string, unknown>).score_design,
+          score_mobile: (auditResult as Record<string, unknown>).score_mobile,
+          score_conversion: (auditResult as Record<string, unknown>).score_conversion,
+          problemes: auditResult.problemes,
+          angle_pitch: auditResult.angle_pitch,
+          type_business: auditResult.type_business ?? lead.type_business,
+          audited_at: new Date().toISOString(),
+          status: "audité",
+        })
+        .eq("id", lead.id);
+    }
+
+    // — Hero (landing) —
+    const html = await generateLandingHtml({
+      nom: lead.nom,
+      type_business: (auditResult.type_business ?? lead.type_business) as string | null,
+      ville: lead.ville,
+      pays: lead.pays,
+      adresse: null,
+      telephone: lead.telephone,
+      note_google: lead.note_google,
+      nb_avis: lead.nb_avis,
+      angle_pitch: auditResult.angle_pitch ?? lead.angle_pitch ?? null,
+      problemes: auditResult.problemes ?? lead.problemes ?? null,
+      langue: auditResult.langue ?? null,
+      couleurs: auditResult.couleurs ?? null,
+      style: auditResult.style ?? null,
+      ton: auditResult.ton ?? null,
+    });
+
+    const landingPatch: Record<string, unknown> = {
+      landing_html: html,
+      landing_url: `/preview/${lead.id}`,
+      landing_generated_at: new Date().toISOString(),
+      status: "hero_prêt",
+    };
+
+    // Screenshots serveur via thum.io (ne fonctionnent que si l'app est déployée)
+    if (lead.site_web) {
+      landingPatch.screenshot_before_url = `https://image.thum.io/get/width/1200/crop/700/noanimate/${lead.site_web}`;
+    }
+    if (appUrl) {
+      landingPatch.screenshot_after_url = `https://image.thum.io/get/width/1200/noanimate/${appUrl}/preview/${lead.id}`;
+      landingPatch.comparison_url = `https://image.thum.io/get/width/2400/noanimate/${appUrl}/compare/${lead.id}`;
+    }
+
+    await supabaseAdmin!.from("leads").update(landingPatch).eq("id", lead.id);
+
+    // — Message WhatsApp (avec aperçu + calendly) —
+    const msg = await generateWhatsAppMessage(
+      {
+        nom: lead.nom,
+        type_business: (auditResult.type_business ?? lead.type_business) as string | null,
+        ville: lead.ville,
+        note_google: lead.note_google,
+        nb_avis: lead.nb_avis,
+        score_global: auditResult.score_global ?? lead.score_global ?? null,
+        angle_pitch: auditResult.angle_pitch ?? lead.angle_pitch ?? null,
+        problemes: auditResult.problemes ?? lead.problemes ?? null,
+      },
+      {
+        previewUrl: previewUrl ?? undefined,
+        calendlyUrl: state.calendly_url,
+      }
+    );
+
+    await supabaseAdmin!
+      .from("leads")
+      .update({
+        whatsapp_message: msg,
+        message_generated_at: new Date().toISOString(),
+        status: "message_prêt",
+      })
+      .eq("id", lead.id);
+
+    const newCount = (state.leads_processed ?? 0) + 1;
+    await updateState({
+      leads_processed: newCount,
+      last_batch_at: new Date().toISOString(),
+    });
+    await addLog(`✓ "${lead.nom}" — audit + hero + message prêts`, "ok");
+
+    return NextResponse.json({
+      status: "processed",
+      lead: { id: lead.id, nom: lead.nom },
+      leads_processed: newCount,
+    });
+  } catch (e) {
+    const errMsg = e instanceof Error ? e.message : "Erreur inconnue";
+    await addLog(`✗ "${lead.nom}" : ${errMsg}`, "error");
+    await supabaseAdmin!
+      .from("leads")
+      .update({ status: "erreur_auto" })
+      .eq("id", lead.id);
+    return NextResponse.json(
+      { status: "error", error: errMsg, lead: { id: lead.id, nom: lead.nom } },
+      { status: 500 }
+    );
+  }
+}
+
+// ── Insertion de leads depuis Apify ──────────────────────────────────────────
+async function insertLeads(
+  places: ScrapedPlace[],
+  keyword: string | null,
+  ville: string | null,
+  pays: string
+): Promise<number> {
+  const withSite = places.filter((p) => p.site_web);
+  if (!withSite.length || !supabaseAdmin) return 0;
+
+  const { data: existing } = await supabaseAdmin.from("leads").select("site_web");
+  const existingSites = new Set(
+    (existing ?? []).map((l: { site_web: string | null }) => l.site_web).filter(Boolean)
+  );
+
+  const newLeads = withSite
+    .filter((p) => !existingSites.has(p.site_web!))
+    .map((p) => ({
+      nom: p.nom,
+      site_web: p.site_web,
+      telephone: p.telephone,
+      type_business: p.type_business,
+      adresse: p.adresse,
+      ville: p.ville ?? ville,
+      pays,
+      note_google: p.note_google,
+      nb_avis: p.nb_avis,
+      email: p.email,
+      facebook: p.facebook,
+      instagram: p.instagram,
+      linkedin: p.linkedin,
+      google_url: p.google_url,
+      keyword,
+      status: "nouveau",
+    }));
+
+  if (newLeads.length > 0) {
+    await supabaseAdmin.from("leads").insert(newLeads);
+  }
+  return newLeads.length;
+}

@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { generateLandingHtml, isAnthropicConfigured } from "@/lib/landing";
+import { generateBuildPrompt, isAnthropicConfigured } from "@/lib/buildprompt";
 import { supabaseAdmin } from "@/lib/supabase";
 
 export const runtime = "nodejs";
@@ -7,10 +7,7 @@ export const maxDuration = 60;
 
 export async function POST(req: Request) {
   if (!isAnthropicConfigured()) {
-    return NextResponse.json(
-      { error: "ANTHROPIC_API_KEY non configuré." },
-      { status: 503 }
-    );
+    return NextResponse.json({ error: "ANTHROPIC_API_KEY non configuré." }, { status: 503 });
   }
   if (!supabaseAdmin) {
     return NextResponse.json({ error: "Supabase non configuré." }, { status: 503 });
@@ -30,7 +27,7 @@ export async function POST(req: Request) {
   const { data: lead, error: getErr } = await supabaseAdmin
     .from("leads")
     .select(
-      "id, nom, type_business, ville, pays, adresse, telephone, note_google, nb_avis, angle_pitch, problemes, audit_json"
+      "id, nom, type_business, ville, pays, telephone, site_web, note_google, nb_avis, angle_pitch, problemes, audit_json"
     )
     .eq("id", leadId)
     .single();
@@ -39,7 +36,6 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: "Lead introuvable" }, { status: 404 });
   }
 
-  // Infos de marque détectées par l'audit (si disponible).
   const audit = (lead.audit_json ?? {}) as {
     langue?: string;
     couleurs?: string[];
@@ -47,9 +43,9 @@ export async function POST(req: Request) {
     ton?: string;
   };
 
-  let html: string;
+  let prompt: string;
   try {
-    html = await generateLandingHtml({
+    prompt = await generateBuildPrompt({
       ...lead,
       langue: audit.langue ?? null,
       couleurs: audit.couleurs ?? null,
@@ -63,20 +59,14 @@ export async function POST(req: Request) {
     );
   }
 
-  const landingUrl = `/preview/${leadId}`;
   const { error: updErr } = await supabaseAdmin
     .from("leads")
-    .update({
-      landing_html: html,
-      landing_url: landingUrl,
-      landing_generated_at: new Date().toISOString(),
-      status: "hero_prêt",
-    })
+    .update({ build_prompt: prompt })
     .eq("id", leadId);
 
   if (updErr) {
     return NextResponse.json({ error: `Supabase: ${updErr.message}` }, { status: 500 });
   }
 
-  return NextResponse.json({ ok: true, landing_url: landingUrl });
+  return NextResponse.json({ ok: true, prompt });
 }

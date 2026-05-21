@@ -22,6 +22,11 @@ export type LeadForLanding = {
   nb_avis: number | null;
   angle_pitch: string | null;
   problemes: string[] | null;
+  // Identité de marque détectée par l'audit (optionnelle)
+  langue?: string | null;
+  couleurs?: string[] | null;
+  style?: string | null;
+  ton?: string | null;
 };
 
 /** Numéro WhatsApp au format wa.me (chiffres uniquement). */
@@ -32,38 +37,51 @@ function waDigits(phone: string | null): string {
 
 const LANDING_PROMPT = (lead: LeadForLanding) => {
   const wa = waDigits(lead.telephone);
-  return `Tu es un développeur front-end de niveau Awwwards / primé en concours, spécialiste des HERO SECTIONS à fort impact pour commerces locaux en Afrique francophone.
+  const langue = (lead.langue || "fr").trim();
+  const couleurs =
+    lead.couleurs && lead.couleurs.length > 0
+      ? lead.couleurs.join(", ")
+      : "à déduire du secteur (élégant, premium)";
+  const style = lead.style || "moderne";
+  const ton = lead.ton || "chaleureux premium";
 
-Crée UNIQUEMENT une HERO SECTION (pas une page complète) pour cet établissement :
+  return `Tu es un Lead Designer & Front-End Engineer primé (Awwwards "Site of the Day", FWA, CSS Design Awards). Tu factures 10 000 $ une hero section. Tu vas livrer une hero d'agence haut de gamme.
 
+CLIENT :
 - Nom : ${lead.nom}
 - Type : ${lead.type_business ?? "commerce local"}
 - Ville : ${lead.ville ?? ""} ${lead.pays ?? ""}
 - Téléphone / WhatsApp : ${lead.telephone ?? "(à compléter)"}
 - Note Google : ${lead.note_google ?? "—"}/5 (${lead.nb_avis ?? 0} avis)
 - Faiblesses du site actuel : ${(lead.problemes ?? []).join(" ; ") || "site obsolète, peu convaincant"}
-- Angle : ${lead.angle_pitch ?? "rendre la première impression moderne et premium"}
+- Angle de vente : ${lead.angle_pitch ?? "première impression moderne et premium"}
 
-OBJECTIF : une hero section qui provoque un effet "wow" immédiat, qui donne envie de réserver, et qui surclasse totalement leur site actuel.
+IDENTITÉ DE MARQUE À RESPECTER (issue de leur site actuel) :
+- LANGUE DE RÉDACTION : ${langue} → TOUS les textes (titre, sous-titre, CTA, badges) DOIVENT être dans cette langue.
+- Couleurs de marque : ${couleurs} → pars de cette palette mais SUBLIME-la (versions plus riches, contrastes maîtrisés). Ne trahis pas l'ADN visuel.
+- Style à faire évoluer vers le haut de gamme : ${style}
+- Ton de marque : ${ton} → l'écriture du copy doit refléter ce ton.
 
-EXIGENCES STRICTES :
-- Renvoie UNIQUEMENT le code HTML, depuis <!DOCTYPE html> jusqu'à </html>. AUCUN texte, AUCUN commentaire, AUCUN bloc markdown autour.
-- Un SEUL fichier autonome : tout le CSS dans une balise <style> dans le <head>.
-- La page ne contient QUE le hero : il doit remplir l'écran (min-height: 100vh, 100svh).
-- Mobile-first impeccable (90% du trafic est mobile en Afrique).
+OBJECTIF : une hero qui provoque un "wow" immédiat, digne d'une marque premium, et qui écrase visuellement leur site actuel — tout en restant fidèle à leur identité.
 
-DIRECTION ARTISTIQUE (niveau primé) :
-- Image de fond plein écran pertinente via https://images.unsplash.com (thème cohérent avec le type d'établissement, ambiance africaine premium), avec overlay sombre dégradé pour la lisibilité.
-- Typographie soignée : titre display imposant (clamp() pour le responsive), Google Fonts (ex: "Playfair Display" pour le titre + "Inter" pour le texte).
-- Hiérarchie claire : petit eyebrow (ex: type + ville), grand titre accrocheur, sous-titre court, puis CTA.
-- Badge "note Google" élégant (étoiles + note + nb d'avis) bien visible.
-- CTA principal "Réserver sur WhatsApp" → lien https://wa.me/${wa || "000000000"} (gros bouton, contraste fort, effet hover).
-- Détails premium : micro-animation d'entrée (fade/slide via @keyframes), espacements généreux, accents dorés, glassmorphism léger sur le badge si pertinent.
-- Palette : terracotta / vert profond / crème / accents dorés.
-- Performance : pas de librairie JS lourde, animations CSS uniquement.
-- Langue : français.
+EXIGENCES TECHNIQUES :
+- Renvoie UNIQUEMENT le HTML, de <!DOCTYPE html> à </html>. AUCUN texte/commentaire/markdown autour.
+- UN SEUL fichier autonome, tout le CSS dans <style> dans le <head>. JS uniquement si trivial (ex: année).
+- La page ne contient QUE le hero : min-height: 100vh; min-height: 100svh.
+- Mobile-first irréprochable, puis sublime en desktop.
 
-Commence directement par <!DOCTYPE html>.`;
+DIRECTION ARTISTIQUE (niveau 10 000 $) :
+- Composition éditoriale soignée : layout avec tension visuelle (asymétrie maîtrisée, grille, marges généreuses), PAS un hero centré générique.
+- Typographie de haut niveau via Google Fonts : titre display à fort caractère (ex: "Playfair Display", "Fraunces", "Cormorant" selon le secteur) + texte net ("Inter", "Manrope"). Utilise clamp() pour un scaling fluide, un letter-spacing et une line-height travaillés.
+- Image de fond premium et PERTINENTE via https://images.unsplash.com (cohérente avec le type d'établissement + ambiance locale), avec traitement pro : overlay en dégradé multidirectionnel, léger grain/vignette, contraste maîtrisé pour la lisibilité.
+- Profondeur & finition : couches superposées, glassmorphism subtil sur les badges, ombres douces, filet doré ou trait d'accent, micro-détails (séparateurs, puces icônes).
+- Badge note Google élégant (étoiles + note + nb d'avis) + 1-2 "trust signals" courts.
+- CTA principal irrésistible "${langue === "en" ? "Book on WhatsApp" : "Réserver sur WhatsApp"}" → https://wa.me/${wa || "000000000"} (bouton à fort contraste, états hover/active soignés, micro-interaction). CTA secondaire discret (ex: voir le menu / appeler).
+- Motion de classe : animations d'entrée orchestrées (fade + slide + scale légers, délais en cascade) via @keyframes, transitions fluides (cubic-bezier). Respecte prefers-reduced-motion.
+- Accessibilité : contrastes AA, focus visibles, alt pertinents.
+- Performance : aucune librairie JS lourde, animations CSS uniquement, images en background-size: cover.
+
+Vise un rendu qu'un directeur artistique senior validerait sans retouche. Commence directement par <!DOCTYPE html>.`;
 };
 
 /** Génère le HTML de la landing pour un lead. */

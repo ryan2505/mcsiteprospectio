@@ -32,7 +32,7 @@ export function middleware(req: NextRequest) {
   });
 }
 
-// /preview/* et /compare/* restent PUBLICS (le prospect doit pouvoir les voir).
+// /preview/*, /compare/* et /api/shot restent PUBLICS.
 export const config = {
   matcher: [
     "/admin/:path*",
@@ -40,5 +40,8 @@ export const config = {
     "/api/audit/:path*",
     "/api/landing/:path*",
     "/api/message/:path*",
+    "/api/buildprompt/:path*",
+    "/api/mark-sent",
+    "/api/automation/:path*",
   ],
 };
