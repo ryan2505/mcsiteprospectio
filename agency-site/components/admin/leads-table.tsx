@@ -1,9 +1,8 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { Button } from "@/components/ui/button";
-import { screenshotUrl } from "@/lib/screenshot";
 import {
   ExternalLink,
   Loader2,
@@ -67,17 +66,41 @@ function waDigits(phone: string | null): string {
   return (phone ?? "").replace(/[^\d]/g, "");
 }
 
+function slugify(s: string): string {
+  const base = s
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/[̀-ͯ]/g, "")
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 40);
+  return base || "hero";
+}
+
+/** Charge html2canvas depuis un CDN, une seule fois. */
+type Html2Canvas = (el: HTMLElement, opts?: Record<string, unknown>) => Promise<HTMLCanvasElement>;
+function loadHtml2Canvas(): Promise<Html2Canvas> {
+  return new Promise((resolve, reject) => {
+    const w = window as unknown as { html2canvas?: Html2Canvas };
+    if (w.html2canvas) return resolve(w.html2canvas);
+    const s = document.createElement("script");
+    s.src = "https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js";
+    s.onload = () => {
+      if (w.html2canvas) resolve(w.html2canvas);
+      else reject(new Error("html2canvas indisponible"));
+    };
+    s.onerror = () => reject(new Error("Chargement de html2canvas échoué (vérifie ta connexion)."));
+    document.body.appendChild(s);
+  });
+}
+
 export function LeadsTable({ leads }: { leads: Lead[] }) {
   const router = useRouter();
   const [busy, setBusy] = useState<{ id: string; action: string } | null>(null);
   const [copiedId, setCopiedId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [origin, setOrigin] = useState("");
-
-  // Origine absolue (pour générer l'URL du screenshot du hero via thum.io).
-  useEffect(() => {
-    setOrigin(window.location.origin);
-  }, []);
+  const [capturingId, setCapturingId] = useState<string | null>(null);
+  const [shots, setShots] = useState<Record<string, string>>({});
 
   async function runAction(id: string, action: "audit" | "landing" | "message") {
     setBusy({ id, action });
@@ -108,6 +131,58 @@ export function LeadsTable({ leads }: { leads: Lead[] }) {
     }
   }
 
+  // Capture du hero DANS le navigateur (fonctionne en local, sans service externe).
+  async function captureHero(id: string, nom: string) {
+    setCapturingId(id);
+    setError(null);
+    let iframe: HTMLIFrameElement | null = null;
+    try {
+      const h2c = await loadHtml2Canvas();
+      iframe = document.createElement("iframe");
+      iframe.style.position = "fixed";
+      iframe.style.left = "-10000px";
+      iframe.style.top = "0";
+      iframe.width = "1200";
+      iframe.height = "760";
+      iframe.src = `/preview/${id}`;
+      document.body.appendChild(iframe);
+
+      // Attendre le chargement de la page + un délai pour images/polices.
+      await new Promise<void>((resolve, reject) => {
+        const to = setTimeout(() => reject(new Error("Chargement du hero trop long")), 20000);
+        iframe!.onload = () => {
+          clearTimeout(to);
+          resolve();
+        };
+      });
+      await new Promise((r) => setTimeout(r, 2800));
+
+      const doc = iframe.contentDocument;
+      if (!doc) throw new Error("Impossible d'accéder au rendu du hero.");
+
+      const canvas = await h2c(doc.body, {
+        useCORS: true,
+        allowTaint: false,
+        backgroundColor: null,
+        width: 1200,
+        height: 760,
+        windowWidth: 1200,
+        windowHeight: 760,
+        scale: 1.5,
+      });
+      const dataUrl = canvas.toDataURL("image/png");
+      setShots((s) => ({ ...s, [id]: dataUrl }));
+    } catch (e) {
+      setError(
+        (e instanceof Error ? e.message : "Erreur de capture") +
+          " — réessaie, ou utilise « Voir le hero » puis Win+Shift+S."
+      );
+    } finally {
+      if (iframe) document.body.removeChild(iframe);
+      setCapturingId(null);
+    }
+  }
+
   const isBusy = (id: string, action: string) =>
     busy?.id === id && busy?.action === action;
 
@@ -133,11 +208,7 @@ export function LeadsTable({ leads }: { leads: Lead[] }) {
           const waHref = l.whatsapp_message
             ? `https://wa.me/${wa}?text=${encodeURIComponent(l.whatsapp_message)}`
             : `https://wa.me/${wa}`;
-          // Screenshot du hero (visible une fois l'app déployée : thum.io ne voit pas localhost)
-          const heroShot =
-            l.landing_url && origin
-              ? screenshotUrl(`${origin}/preview/${l.id}`, 1000)
-              : "";
+          const shot = shots[l.id];
           return (
             <div
               key={l.id}
@@ -239,40 +310,44 @@ export function LeadsTable({ leads }: { leads: Lead[] }) {
                 </div>
               )}
 
-              {/* Visuel du hero à joindre au message */}
+              {/* Visuel du hero à joindre au message (capture dans le navigateur) */}
               {l.landing_url && (
                 <div className="mt-4 rounded-lg border border-border bg-muted/30 p-4">
                   <div className="flex items-center gap-2 text-xs font-semibold">
                     <Images className="h-4 w-4 text-primary" />
                     Visuel du nouveau hero (à joindre dans WhatsApp)
                   </div>
-                  {heroShot ? (
-                    <a
-                      href={heroShot}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="mt-3 block overflow-hidden rounded-lg border border-border"
-                    >
+
+                  {shot && (
+                    <div className="mt-3 overflow-hidden rounded-lg border border-border">
                       {/* eslint-disable-next-line @next/next/no-img-element */}
-                      <img
-                        src={heroShot}
-                        alt={`Aperçu hero ${l.nom}`}
-                        className="w-full"
-                        loading="lazy"
-                      />
-                    </a>
-                  ) : (
-                    <p className="mt-2 text-xs text-muted-foreground">
-                      L&apos;aperçu s&apos;affichera une fois l&apos;app déployée
-                      (le service de capture ne voit pas localhost).
-                    </p>
+                      <img src={shot} alt={`Hero ${l.nom}`} className="w-full" />
+                    </div>
                   )}
+
                   <div className="mt-3 flex flex-wrap gap-2">
-                    {heroShot && (
+                    <Button
+                      size="sm"
+                      onClick={() => captureHero(l.id, l.nom)}
+                      disabled={capturingId === l.id}
+                    >
+                      {capturingId === l.id ? (
+                        <>
+                          <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                          Capture…
+                        </>
+                      ) : (
+                        <>
+                          <Images className="h-3.5 w-3.5" />
+                          {shot ? "Recapturer" : "Capturer le visuel"}
+                        </>
+                      )}
+                    </Button>
+                    {shot && (
                       <Button asChild size="sm" variant="outline">
-                        <a href={heroShot} download target="_blank" rel="noopener noreferrer">
+                        <a href={shot} download={`hero-${slugify(l.nom)}.png`}>
                           <Download className="h-3.5 w-3.5" />
-                          Télécharger le visuel
+                          Télécharger
                         </a>
                       </Button>
                     )}
@@ -285,7 +360,7 @@ export function LeadsTable({ leads }: { leads: Lead[] }) {
                     <Button asChild size="sm" variant="ghost">
                       <a href={`/compare/${l.id}`} target="_blank" rel="noopener noreferrer">
                         <Images className="h-3.5 w-3.5" />
-                        Comparatif avant/après
+                        Comparatif
                       </a>
                     </Button>
                   </div>
