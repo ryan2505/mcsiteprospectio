@@ -15,6 +15,7 @@ import { getScrapeResults, startScrape, isApifyConfigured } from "@/lib/apify";
 import type { ScrapedPlace } from "@/lib/apify";
 import type { AuditResult } from "@/lib/audit";
 import type { AutomationState } from "@/lib/automation";
+import { normalizeWhatsApp } from "@/lib/phone";
 
 export const runtime = "nodejs";
 export const maxDuration = 60;
@@ -222,11 +223,14 @@ export async function POST() {
       problemes: auditResult.problemes ?? lead.problemes ?? null,
     };
 
+    const comparisonUrl = appUrl ? `${appUrl}/compare/${lead.id}` : undefined;
+
     const [html, msg] = await Promise.all([
       generateLandingHtml(landingParams),
       generateWhatsAppMessage(messageParams, {
         previewUrl: previewUrl ?? undefined,
         calendlyUrl: state.calendly_url,
+        comparisonUrl,
       }),
     ]);
 
@@ -343,8 +347,16 @@ async function insertLeads(
   ville: string | null,
   pays: string
 ): Promise<number> {
-  const withSite = places.filter((p) => p.site_web);
-  if (!withSite.length || !supabaseAdmin) return 0;
+  if (!supabaseAdmin) return 0;
+
+  // Filtrer : site web requis + numéro mobile WhatsApp valide
+  const qualified = places.flatMap((p) => {
+    if (!p.site_web) return [];
+    const wa = normalizeWhatsApp(p.telephone, pays);
+    if (!wa) return [];
+    return [{ ...p, telephone: wa }];
+  });
+  if (!qualified.length) return 0;
 
   const { data: existing } = await supabaseAdmin.from("leads").select("site_web");
   const existingSites = new Set(
@@ -354,12 +366,12 @@ async function insertLeads(
       .map((s) => normalizeUrl(s!))
   );
 
-  const newLeads = withSite
+  const newLeads = qualified
     .filter((p) => !existingSites.has(normalizeUrl(p.site_web!)))
     .map((p) => ({
       nom: p.nom,
       site_web: p.site_web,
-      telephone: p.telephone,
+      telephone: p.telephone,  // déjà normalisé E.164
       type_business: p.type_business,
       adresse: p.adresse,
       ville: ville,

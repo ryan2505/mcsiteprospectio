@@ -24,6 +24,7 @@ export type LeadForMessage = {
 export type MessageOptions = {
   previewUrl?: string;
   calendlyUrl?: string;
+  comparisonUrl?: string;
 };
 
 const MESSAGE_PROMPT = (lead: LeadForMessage, opts?: MessageOptions) => {
@@ -40,23 +41,25 @@ Contexte sur le prospect :
 - Score actuel du site : ${lead.score_global ?? "?"}/100
 - Problème principal : ${majorProblem}
 - Note Google : ${lead.note_google ?? "?"}/5 (${lead.nb_avis ?? 0} avis)
-${opts?.previewUrl ? `- Lien aperçu du nouveau hero : ${opts.previewUrl}` : ""}
-${opts?.calendlyUrl ? `- Lien calendly : ${opts.calendlyUrl}` : ""}
+${opts?.comparisonUrl ? `- Image comparaison AVANT/APRÈS (à joindre en pièce jointe) : ${opts.comparisonUrl}` : ""}
+${opts?.previewUrl ? `- Lien aperçu du nouveau site : ${opts.previewUrl}` : ""}
+${opts?.calendlyUrl ? `- Lien prise de RDV : ${opts.calendlyUrl}` : ""}
 
 Rédige un message WhatsApp en français qui :
-1. Commence par "Bonjour l'équipe de ${lead.nom}" (ou prénom gérant si connu).
-2. Mentionne UN détail spécifique de l'établissement (note Google, type, etc.).
-3. Pose UN constat factuel (pas accusateur) sur leur site — problème précis.
-4. Annonce qu'on a préparé leur nouvelle page GRATUITEMENT${opts?.previewUrl ? ` et donne le lien directement : ${opts.previewUrl}` : ""}.
-5. Propose un call de 30 min sans engagement${opts?.calendlyUrl ? ` avec ce lien : ${opts.calendlyUrl}` : ""}.
+1. Commence par "Bonjour l'équipe de ${lead.nom}".
+2. Mentionne UN détail spécifique (note Google, type d'établissement, etc.).
+3. Pose UN constat factuel sur leur site — problème précis, sans accuser.
+4. Annonce qu'on a préparé leur nouvelle page web GRATUITEMENT et qu'on leur envoie la comparaison AVANT/APRÈS en image${opts?.previewUrl ? ` + lien : ${opts.previewUrl}` : ""}.
+5. Propose un call de 30 min sans engagement${opts?.calendlyUrl ? ` : ${opts.calendlyUrl}` : ""}.
 6. Termine par une question courte ("Ça vous intéresse ?").
 
 Règles STRICTES :
-- 100 mots MAXIMUM.
+- 110 mots MAXIMUM.
 - Vouvoiement par défaut ; tutoiement seulement si type = lounge/bar.
 - 1 emoji maximum, naturel.
 - INTERDITS : "optimisation", "conversion", "ROI", "doublez vos ventes", "j'espère".
 - Inclus les liens tels quels dans le texte (ne les reformule pas).
+- Mentionne explicitement qu'une image comparaison AVANT/APRÈS est jointe.
 
 Renvoie UNIQUEMENT le texte du message, rien d'autre.`;
   }

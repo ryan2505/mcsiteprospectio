@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { getScrapeResults, isApifyConfigured } from "@/lib/apify";
 import { supabaseAdmin } from "@/lib/supabase";
+import { normalizeWhatsApp } from "@/lib/phone";
 
 export const runtime = "nodejs";
 export const maxDuration = 60;
@@ -57,14 +58,19 @@ export async function POST(req: Request) {
     );
   }
 
-  // Run réussi : on filtre, déduplique et insère.
-  const withSite = result.places.filter((p) => p.site_web);
+  // Run réussi : normaliser les numéros WhatsApp, dédupliquer et insérer.
+  // On ne garde que les leads avec site web + numéro mobile valide.
+  const qualified = result.places.flatMap((p) => {
+    if (!p.site_web) return [];
+    const wa = normalizeWhatsApp(p.telephone, pays || "Cameroun");
+    if (!wa) return [];
+    return [{ ...p, telephone: wa }];
+  });
 
   const seen = new Set<string>();
-  const uniques = withSite.filter((p) => {
-    const key = p.site_web!;
-    if (seen.has(key)) return false;
-    seen.add(key);
+  const uniques = qualified.filter((p) => {
+    if (seen.has(p.site_web!)) return false;
+    seen.add(p.site_web!);
     return true;
   });
 
@@ -91,8 +97,7 @@ export async function POST(req: Request) {
         nom: p.nom,
         type_business: p.type_business,
         adresse: p.adresse,
-        telephone: p.telephone,
-        whatsapp: p.telephone,
+        telephone: p.telephone,  // déjà normalisé E.164
         email: p.email,
         facebook: p.facebook,
         instagram: p.instagram,
@@ -121,7 +126,7 @@ export async function POST(req: Request) {
     finished: true,
     status: result.status,
     scraped: result.places.length,
-    with_site: withSite.length,
+    with_site: qualified.length,
     inserted,
   });
 }

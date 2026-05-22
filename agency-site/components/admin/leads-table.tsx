@@ -320,6 +320,7 @@ export function LeadsTable({ leads }: { leads: Lead[] }) {
   const [shots, setShots] = useState<Record<string, string>>({});
   const [comparingId, setComparingId] = useState<string | null>(null);
   const [comparisons, setComparisons] = useState<Record<string, string>>({});
+  const [sendingId, setSendingId] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<Tab>("recents");
 
   const tabCounts = useMemo(() => ({
@@ -382,6 +383,48 @@ export function LeadsTable({ leads }: { leads: Lead[] }) {
       );
     } finally {
       setCapturingId(null);
+    }
+  }
+
+  // Capture + téléchargement + ouverture WhatsApp en un clic.
+  async function sendWithAttachment(l: Lead) {
+    if (!l.whatsapp_message) return;
+    setSendingId(l.id);
+    setError(null);
+    try {
+      // Capture le comparatif si pas encore fait
+      let dataUrl = comparisons[l.id];
+      if (!dataUrl) {
+        const afterUrl = shots[l.id] ?? (await renderHeroDataUrl(l.id));
+        if (!shots[l.id]) setShots((s) => ({ ...s, [l.id]: afterUrl }));
+        const afterImg = await loadImage(afterUrl);
+        let beforeImg: HTMLImageElement | null = null;
+        if (l.site_web) {
+          try {
+            beforeImg = await loadImage(`/api/shot?url=${encodeURIComponent(l.site_web)}&crop=700`);
+          } catch { beforeImg = null; }
+        }
+        dataUrl = composeComparison(beforeImg, afterImg, l.nom);
+        setComparisons((c) => ({ ...c, [l.id]: dataUrl }));
+      }
+
+      // Télécharger l'image automatiquement
+      const a = document.createElement("a");
+      a.href = dataUrl;
+      a.download = `avant-apres-${slugify(l.nom)}.png`;
+      a.click();
+
+      // Ouvrir WhatsApp après un court délai
+      await new Promise((r) => setTimeout(r, 600));
+      const wa = waDigits(l.telephone);
+      const href = wa
+        ? `https://wa.me/${wa}?text=${encodeURIComponent(l.whatsapp_message!)}`
+        : `https://wa.me/?text=${encodeURIComponent(l.whatsapp_message!)}`;
+      window.open(href, "_blank");
+    } catch (e) {
+      setError((e instanceof Error ? e.message : "Erreur") + " — réessaie.");
+    } finally {
+      setSendingId(null);
     }
   }
 
@@ -689,13 +732,48 @@ export function LeadsTable({ leads }: { leads: Lead[] }) {
                   <p className="mt-2 whitespace-pre-wrap text-sm">
                     {l.whatsapp_message}
                   </p>
-                  {l.landing_url && (
-                    <p className="mt-2 text-xs text-muted-foreground">
-                      📎 Pense à joindre le visuel du hero (ci-dessus) dans
-                      WhatsApp avant d&apos;envoyer.
-                    </p>
+
+                  {/* Aperçu du comparatif si déjà capturé */}
+                  {comparisons[l.id] && (
+                    <div className="mt-3 overflow-hidden rounded-lg border border-[#25D366]/20">
+                      {/* eslint-disable-next-line @next/next/no-img-element */}
+                      <img src={comparisons[l.id]} alt={`Avant/après ${l.nom}`} className="w-full" />
+                    </div>
                   )}
+
                   <div className="mt-3 flex flex-wrap gap-2">
+                    {/* Bouton principal : capture + téléchargement + WhatsApp */}
+                    {l.landing_url && wa && (
+                      <Button
+                        size="sm"
+                        onClick={() => sendWithAttachment(l)}
+                        disabled={sendingId === l.id}
+                        className="bg-[#25D366] text-white hover:bg-[#1ebe5d]"
+                      >
+                        {sendingId === l.id ? (
+                          <>
+                            <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                            Préparation…
+                          </>
+                        ) : (
+                          <>
+                            <Send className="h-3.5 w-3.5" />
+                            Envoyer avec pièce jointe
+                          </>
+                        )}
+                      </Button>
+                    )}
+
+                    {/* Fallback : juste ouvrir WhatsApp sans image */}
+                    {wa && !l.landing_url && (
+                      <Button asChild size="sm" className="bg-[#25D366] text-white hover:bg-[#1ebe5d]">
+                        <a href={waHref} target="_blank" rel="noopener noreferrer">
+                          <Send className="h-3.5 w-3.5" />
+                          Ouvrir WhatsApp
+                        </a>
+                      </Button>
+                    )}
+
                     <Button
                       size="sm"
                       variant="outline"
@@ -709,25 +787,17 @@ export function LeadsTable({ leads }: { leads: Lead[] }) {
                       ) : (
                         <>
                           <Copy className="h-3.5 w-3.5" />
-                          Copier
+                          Copier le message
                         </>
                       )}
                     </Button>
-                    {wa && (
-                      <Button asChild size="sm" variant="whatsapp">
-                        <a href={waHref} target="_blank" rel="noopener noreferrer">
-                          <Send className="h-3.5 w-3.5" />
-                          Ouvrir WhatsApp
-                        </a>
-                      </Button>
-                    )}
+
                     {!SENT_STATUSES.includes(l.status ?? "") && (
                       <Button
                         size="sm"
                         variant="outline"
                         onClick={() => runAction(l.id, "mark-sent")}
                         disabled={!!busy}
-                        title="Marquer ce lead comme message envoyé"
                       >
                         {isBusy(l.id, "mark-sent") ? (
                           <Loader2 className="h-3.5 w-3.5 animate-spin" />
@@ -738,6 +808,12 @@ export function LeadsTable({ leads }: { leads: Lead[] }) {
                       </Button>
                     )}
                   </div>
+
+                  {sendingId === l.id && (
+                    <p className="mt-2 text-xs text-muted-foreground">
+                      📥 L&apos;image AVANT/APRÈS va se télécharger automatiquement — attache-la dans WhatsApp avant d&apos;envoyer.
+                    </p>
+                  )}
                 </div>
               )}
 
