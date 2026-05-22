@@ -91,6 +91,7 @@ export async function generateLandingHtml(lead: LeadForLanding): Promise<string>
   }
 
   const res = await fetch("https://api.anthropic.com/v1/messages", {
+    signal: AbortSignal.timeout(55_000),
     method: "POST",
     headers: {
       "x-api-key": ANTHROPIC_API_KEY,
@@ -99,14 +100,14 @@ export async function generateLandingHtml(lead: LeadForLanding): Promise<string>
     },
     body: JSON.stringify({
       model: ANTHROPIC_MODEL,
-      max_tokens: 8000,
+      max_tokens: 4096,
       messages: [{ role: "user", content: LANDING_PROMPT(lead) }],
     }),
   });
 
   if (!res.ok) {
     const text = await res.text().catch(() => "");
-    throw new Error(`Anthropic a renvoyé ${res.status} : ${text.slice(0, 200)}`);
+    throw new Error(`Anthropic landing ${res.status} : ${text.slice(0, 200)}`);
   }
 
   const data = (await res.json()) as {

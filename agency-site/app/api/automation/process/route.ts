@@ -18,7 +18,7 @@ import type { AutomationState } from "@/lib/automation";
 import { normalizeWhatsApp } from "@/lib/phone";
 
 export const runtime = "nodejs";
-export const maxDuration = 60;
+export const maxDuration = 120;
 
 const BATCH_PAUSE_MS = 30 * 60 * 1000;
 

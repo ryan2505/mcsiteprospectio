@@ -96,6 +96,7 @@ export async function generateWhatsAppMessage(
   }
 
   const res = await fetch("https://api.anthropic.com/v1/messages", {
+    signal: AbortSignal.timeout(30_000),
     method: "POST",
     headers: {
       "x-api-key": ANTHROPIC_API_KEY,

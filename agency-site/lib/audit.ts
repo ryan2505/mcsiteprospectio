@@ -100,6 +100,7 @@ export async function auditSite(url: string): Promise<AuditResult> {
   }
 
   const res = await fetch("https://api.anthropic.com/v1/messages", {
+    signal: AbortSignal.timeout(45_000),
     method: "POST",
     headers: {
       "x-api-key": ANTHROPIC_API_KEY,
@@ -115,7 +116,7 @@ export async function auditSite(url: string): Promise<AuditResult> {
 
   if (!res.ok) {
     const text = await res.text().catch(() => "");
-    throw new Error(`Anthropic a renvoyé ${res.status} : ${text.slice(0, 200)}`);
+    throw new Error(`Anthropic audit ${res.status} : ${text.slice(0, 200)}`);
   }
 
   const data = (await res.json()) as {
