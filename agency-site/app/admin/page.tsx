@@ -15,10 +15,10 @@ async function getLeads(): Promise<{ leads: Lead[]; configured: boolean; errorMs
   const { data, error } = await supabaseAdmin
     .from("leads")
     .select(
-      "id, nom, type_business, ville, adresse, telephone, email, facebook, instagram, linkedin, site_web, google_url, note_google, nb_avis, score_global, problemes, angle_pitch, landing_url, whatsapp_message, build_prompt, status"
+      "id, nom, type_business, ville, adresse, telephone, email, facebook, instagram, linkedin, site_web, google_url, note_google, nb_avis, score_global, problemes, angle_pitch, landing_url, whatsapp_message, build_prompt, status, created_at"
     )
     .order("created_at", { ascending: false })
-    .limit(100);
+    .limit(200);
 
   if (error) return { leads: [], configured: true, errorMsg: error.message };
   return { leads: (data as Lead[]) ?? [], configured: true };
@@ -27,12 +27,17 @@ async function getLeads(): Promise<{ leads: Lead[]; configured: boolean; errorMs
 export default async function AdminPage() {
   const { leads, configured, errorMsg } = await getLeads();
 
+  const yesterday = new Date(Date.now() - 24 * 3600_000).toISOString();
   const stats = {
     total: leads.length,
     audited: leads.filter((l) => l.score_global != null).length,
-    heroes: leads.filter((l) => l.landing_url != null).length,
+    messages: leads.filter((l) => l.whatsapp_message != null).length,
     messagesSent: leads.filter((l) =>
       ["envoyé", "répondu", "rdv", "client"].includes(l.status ?? "")
+    ).length,
+    nouveauxToday: leads.filter((l) => (l.created_at ?? "") > yesterday).length,
+    prets: leads.filter(
+      (l) => l.whatsapp_message != null && !["envoyé", "répondu", "rdv", "client"].includes(l.status ?? "")
     ).length,
   };
 
@@ -87,21 +92,38 @@ export default async function AdminPage() {
           </div>
         )}
 
-        <div className="mb-6 grid grid-cols-4 gap-4">
+        {/* Leads ajoutés aujourd'hui — mise en avant */}
+        {stats.nouveauxToday > 0 && (
+          <div className="mb-4 flex items-center gap-3 rounded-xl border border-primary/30 bg-primary/5 px-4 py-3">
+            <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-primary text-sm font-bold text-primary-foreground">
+              {stats.nouveauxToday}
+            </span>
+            <div className="text-sm">
+              <span className="font-semibold">nouveau{stats.nouveauxToday > 1 ? "x" : ""} lead{stats.nouveauxToday > 1 ? "s" : ""}</span>
+              {" "}ajouté{stats.nouveauxToday > 1 ? "s" : ""} ces dernières 24h
+              {stats.prets > 0 && (
+                <span className="ml-2 text-muted-foreground">·{" "}
+                  <strong className="text-[#25D366]">{stats.prets}</strong> prêt{stats.prets > 1 ? "s" : ""} à envoyer
+                </span>
+              )}
+            </div>
+          </div>
+        )}
+
+        {/* Pipeline funnel */}
+        <div className="mb-6 grid grid-cols-4 gap-3">
           {[
-            { label: "Leads", value: stats.total },
-            { label: "Audités", value: stats.audited },
-            { label: "Hero générés", value: stats.heroes },
-            { label: "Messages envoyés", value: stats.messagesSent },
+            { label: "Total leads", value: stats.total, color: "text-foreground" },
+            { label: "Audités", value: stats.audited, color: "text-blue-600" },
+            { label: "Messages prêts", value: stats.messages, color: "text-[#25D366]" },
+            { label: "Envoyés", value: stats.messagesSent, color: "text-green-600" },
           ].map((s) => (
             <div
               key={s.label}
               className="rounded-xl border border-border bg-card p-4 text-center"
             >
-              <div className="text-2xl font-bold text-primary">{s.value}</div>
-              <div className="mt-0.5 text-xs text-muted-foreground">
-                {s.label}
-              </div>
+              <div className={`text-2xl font-bold ${s.color}`}>{s.value}</div>
+              <div className="mt-0.5 text-xs text-muted-foreground">{s.label}</div>
             </div>
           ))}
         </div>

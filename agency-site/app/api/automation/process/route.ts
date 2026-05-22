@@ -1,9 +1,9 @@
 /**
  * Traite UN lead à la fois dans le pipeline complet :
- *   audit → hero (landing) → screenshots (thum.io) → message (avec preview + calendly)
+ *   audit → hero (landing) + message (en parallèle) → screenshots (thum.io)
  *
  * Appelé en boucle par l'interface d'automatisation.
- * Renvoie : { status: "processed"|"scraping"|"done"|"error"|"idle", ... }
+ * Renvoie : { status: "processed"|"scraping"|"batch_pause"|"done"|"error"|"idle", ... }
  */
 import { NextResponse } from "next/server";
 import { getState, updateState, addLog } from "@/lib/automation";
@@ -14,9 +14,12 @@ import { generateWhatsAppMessage } from "@/lib/message";
 import { getScrapeResults, startScrape, isApifyConfigured } from "@/lib/apify";
 import type { ScrapedPlace } from "@/lib/apify";
 import type { AuditResult } from "@/lib/audit";
+import type { AutomationState } from "@/lib/automation";
 
 export const runtime = "nodejs";
 export const maxDuration = 60;
+
+const BATCH_PAUSE_MS = 30 * 60 * 1000;
 
 export async function POST() {
   const state = await getState();
@@ -24,7 +27,25 @@ export async function POST() {
     return NextResponse.json({ status: state?.status ?? "idle", skip: true });
   }
 
-  // ── 1. Vérifier le scraping Apify en cours ──────────────────────────────
+  const batchSize = state.batch_size ?? 5;
+
+  // ── 1. Pause batch côté serveur (quand pas de scraping en cours) ────────────
+  if (
+    !state.scrape_run_id &&
+    state.last_batch_at &&
+    (state.leads_processed ?? 0) > 0 &&
+    (state.leads_processed ?? 0) % batchSize === 0
+  ) {
+    const pauseUntil = new Date(state.last_batch_at).getTime() + BATCH_PAUSE_MS;
+    if (Date.now() < pauseUntil) {
+      return NextResponse.json({
+        status: "batch_pause",
+        resume_at: new Date(pauseUntil).toISOString(),
+      });
+    }
+  }
+
+  // ── 2. Vérifier le scraping Apify en cours ──────────────────────────────────
   if (state.scrape_run_id) {
     try {
       const result = await getScrapeResults(state.scrape_run_id);
@@ -64,7 +85,7 @@ export async function POST() {
     }
   }
 
-  // ── 2. Récupérer le prochain lead à traiter ─────────────────────────────
+  // ── 3. Récupérer le prochain lead à traiter ─────────────────────────────────
   const { data: rows } = await supabaseAdmin!
     .from("leads")
     .select(
@@ -91,7 +112,7 @@ export async function POST() {
     problemes: string[] | null;
   } | undefined;
 
-  // ── 3. Plus de leads → passer au mot-clé suivant ───────────────────────
+  // ── 4. Plus de leads → passer au mot-clé suivant ───────────────────────────
   if (!lead) {
     const nextKeyword = state.keywords_pool?.[0] ?? null;
     if (!nextKeyword) {
@@ -100,8 +121,16 @@ export async function POST() {
       return NextResponse.json({ status: "done" });
     }
 
+    // Vérifie si ce keyword a déjà été scraped (leads existants en DB)
+    const { count: existingForKeyword } = await supabaseAdmin!
+      .from("leads")
+      .select("id", { count: "exact", head: true })
+      .eq("keyword", nextKeyword);
+
+    const alreadyScraped = (existingForKeyword ?? 0) > 0;
+
     let runId: string | null = null;
-    if (isApifyConfigured()) {
+    if (!alreadyScraped && isApifyConfigured()) {
       try {
         runId = await startScrape(nextKeyword, {
           maxResults: 25,
@@ -122,10 +151,12 @@ export async function POST() {
       keywords_done: [...(state.keywords_done ?? []), nextKeyword],
     });
     await addLog(
-      runId
+      alreadyScraped
+        ? `"${nextKeyword}" déjà dans la base (${existingForKeyword} leads) — scraping ignoré`
+        : runId
         ? `Nouveau mot-clé : "${nextKeyword}" — scraping lancé`
         : `Nouveau mot-clé : "${nextKeyword}" — traitement leads existants`,
-      "info"
+      alreadyScraped ? "info" : "info"
     );
     return NextResponse.json({
       status: runId ? "scraping" : "processing",
@@ -134,7 +165,7 @@ export async function POST() {
     });
   }
 
-  // ── 4. Traiter le lead : audit → hero → message ─────────────────────────
+  // ── 5. Traiter le lead : audit → hero + message (en parallèle) ─────────────
   const appUrl = (process.env.APP_URL ?? "").replace(/\/$/, "");
   const previewUrl = appUrl ? `${appUrl}/preview/${lead.id}` : null;
 
@@ -162,8 +193,8 @@ export async function POST() {
         .eq("id", lead.id);
     }
 
-    // — Hero (landing) —
-    const html = await generateLandingHtml({
+    // — Hero + Message en parallèle (après l'audit qui fournit les données) —
+    const landingParams = {
       nom: lead.nom,
       type_business: (auditResult.type_business ?? lead.type_business) as string | null,
       ville: lead.ville,
@@ -178,8 +209,28 @@ export async function POST() {
       couleurs: auditResult.couleurs ?? null,
       style: auditResult.style ?? null,
       ton: auditResult.ton ?? null,
-    });
+    };
 
+    const messageParams = {
+      nom: lead.nom,
+      type_business: (auditResult.type_business ?? lead.type_business) as string | null,
+      ville: lead.ville,
+      note_google: lead.note_google,
+      nb_avis: lead.nb_avis,
+      score_global: auditResult.score_global ?? lead.score_global ?? null,
+      angle_pitch: auditResult.angle_pitch ?? lead.angle_pitch ?? null,
+      problemes: auditResult.problemes ?? lead.problemes ?? null,
+    };
+
+    const [html, msg] = await Promise.all([
+      generateLandingHtml(landingParams),
+      generateWhatsAppMessage(messageParams, {
+        previewUrl: previewUrl ?? undefined,
+        calendlyUrl: state.calendly_url,
+      }),
+    ]);
+
+    // — Mise à jour landing + screenshots —
     const landingPatch: Record<string, unknown> = {
       landing_html: html,
       landing_url: `/preview/${lead.id}`,
@@ -187,7 +238,6 @@ export async function POST() {
       status: "hero_prêt",
     };
 
-    // Screenshots serveur via thum.io (ne fonctionnent que si l'app est déployée)
     if (lead.site_web) {
       landingPatch.screenshot_before_url = `https://image.thum.io/get/width/1200/crop/700/noanimate/${lead.site_web}`;
     }
@@ -198,24 +248,7 @@ export async function POST() {
 
     await supabaseAdmin!.from("leads").update(landingPatch).eq("id", lead.id);
 
-    // — Message WhatsApp (avec aperçu + calendly) —
-    const msg = await generateWhatsAppMessage(
-      {
-        nom: lead.nom,
-        type_business: (auditResult.type_business ?? lead.type_business) as string | null,
-        ville: lead.ville,
-        note_google: lead.note_google,
-        nb_avis: lead.nb_avis,
-        score_global: auditResult.score_global ?? lead.score_global ?? null,
-        angle_pitch: auditResult.angle_pitch ?? lead.angle_pitch ?? null,
-        problemes: auditResult.problemes ?? lead.problemes ?? null,
-      },
-      {
-        previewUrl: previewUrl ?? undefined,
-        calendlyUrl: state.calendly_url,
-      }
-    );
-
+    // — Mise à jour message —
     await supabaseAdmin!
       .from("leads")
       .update({
@@ -226,11 +259,51 @@ export async function POST() {
       .eq("id", lead.id);
 
     const newCount = (state.leads_processed ?? 0) + 1;
-    await updateState({
+    const batchComplete = newCount % batchSize === 0;
+
+    const statePatch: Partial<AutomationState> = {
       leads_processed: newCount,
       last_batch_at: new Date().toISOString(),
-    });
-    await addLog(`✓ "${lead.nom}" — audit + hero + message prêts`, "ok");
+    };
+
+    // Pre-scrape le keyword suivant dès la fin du batch (si pas déjà scraped)
+    if (batchComplete && isApifyConfigured() && (state.keywords_pool?.length ?? 0) > 0) {
+      const nextKeyword = state.keywords_pool[0];
+      const { count: preCount } = await supabaseAdmin!
+        .from("leads")
+        .select("id", { count: "exact", head: true })
+        .eq("keyword", nextKeyword);
+
+      if ((preCount ?? 0) > 0) {
+        await addLog(`Batch ${newCount} terminé — "${nextKeyword}" déjà scraped, ignoré`, "info");
+      } else
+      try {
+        const runId = await startScrape(nextKeyword, {
+          maxResults: 25,
+          countryCode: state.pays?.toLowerCase() === "cameroun" ? "cm" : undefined,
+        });
+        statePatch.current_keyword = nextKeyword;
+        statePatch.keywords_pool = state.keywords_pool.slice(1);
+        statePatch.keywords_done = [...(state.keywords_done ?? []), nextKeyword];
+        statePatch.scrape_run_id = runId;
+        await addLog(
+          `Batch ${newCount} terminé — pré-scraping "${nextKeyword}" lancé (pendant la pause)`,
+          "info"
+        );
+      } catch (e) {
+        await addLog(
+          `Batch terminé — erreur pré-scraping : ${e instanceof Error ? e.message : "?"}`,
+          "error"
+        );
+      }
+    }
+
+    await updateState(statePatch);
+    await addLog(
+      `✓ "${lead.nom}" — audit + hero + message prêts`,
+      "ok",
+      `/preview/${lead.id}`
+    );
 
     return NextResponse.json({
       status: "processed",
@@ -251,6 +324,18 @@ export async function POST() {
   }
 }
 
+// ── Normalisation d'URL pour la déduplication ────────────────────────────────
+function normalizeUrl(url: string): string {
+  try {
+    const u = new URL(url.startsWith("http") ? url : `https://${url}`);
+    return `${u.hostname.replace(/^www\./, "")}${u.pathname}`
+      .toLowerCase()
+      .replace(/\/$/, "");
+  } catch {
+    return url.toLowerCase().replace(/^https?:\/\//, "").replace(/^www\./, "").replace(/\/$/, "");
+  }
+}
+
 // ── Insertion de leads depuis Apify ──────────────────────────────────────────
 async function insertLeads(
   places: ScrapedPlace[],
@@ -263,18 +348,21 @@ async function insertLeads(
 
   const { data: existing } = await supabaseAdmin.from("leads").select("site_web");
   const existingSites = new Set(
-    (existing ?? []).map((l: { site_web: string | null }) => l.site_web).filter(Boolean)
+    (existing ?? [])
+      .map((l: { site_web: string | null }) => l.site_web)
+      .filter(Boolean)
+      .map((s) => normalizeUrl(s!))
   );
 
   const newLeads = withSite
-    .filter((p) => !existingSites.has(p.site_web!))
+    .filter((p) => !existingSites.has(normalizeUrl(p.site_web!)))
     .map((p) => ({
       nom: p.nom,
       site_web: p.site_web,
       telephone: p.telephone,
       type_business: p.type_business,
       adresse: p.adresse,
-      ville: p.ville ?? ville,
+      ville: ville,
       pays,
       note_google: p.note_google,
       nb_avis: p.nb_avis,

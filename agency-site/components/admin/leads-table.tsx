@@ -26,26 +26,71 @@ import {
 } from "lucide-react";
 
 const TABS = [
-  { key: "tous",      label: "Tous" },
-  { key: "nouveaux",  label: "À auditer" },
-  { key: "audites",   label: "Audités" },
-  { key: "heroes",    label: "Hero prêts" },
-  { key: "messages",  label: "Messages prêts" },
+  { key: "recents",   label: "Récents 24h" },
+  { key: "a_traiter", label: "À traiter" },
+  { key: "prets",     label: "Prêts à envoyer" },
   { key: "envoyes",   label: "Envoyés" },
+  { key: "tous",      label: "Tous" },
 ] as const;
 type Tab = typeof TABS[number]["key"];
 
 const SENT_STATUSES = ["envoyé", "répondu", "rdv", "client"];
+const RECENT_MS = 24 * 60 * 60 * 1000;
+
+function isRecent(lead: Lead): boolean {
+  if (!lead.created_at) return false;
+  return Date.now() - new Date(lead.created_at).getTime() < RECENT_MS;
+}
+
+function isNew(lead: Lead): boolean {
+  if (!lead.created_at) return false;
+  return Date.now() - new Date(lead.created_at).getTime() < 4 * 3600_000;
+}
 
 function filterLeads(leads: Lead[], tab: Tab): Lead[] {
   switch (tab) {
-    case "nouveaux":  return leads.filter((l) => l.score_global == null);
-    case "audites":   return leads.filter((l) => l.score_global != null);
-    case "heroes":    return leads.filter((l) => l.landing_url != null);
-    case "messages":  return leads.filter((l) => l.whatsapp_message != null);
+    case "recents":   return leads.filter(isRecent);
+    case "a_traiter": return leads.filter(
+      (l) => l.whatsapp_message == null && !SENT_STATUSES.includes(l.status ?? "")
+    );
+    case "prets":     return leads.filter(
+      (l) => l.whatsapp_message != null && !SENT_STATUSES.includes(l.status ?? "")
+    );
     case "envoyes":   return leads.filter((l) => SENT_STATUSES.includes(l.status ?? ""));
     default:          return leads;
   }
+}
+
+function relativeTime(dateStr: string): string {
+  const diff = Date.now() - new Date(dateStr).getTime();
+  const mins = Math.floor(diff / 60_000);
+  if (mins < 1) return "à l'instant";
+  if (mins < 60) return `il y a ${mins}min`;
+  const hrs = Math.floor(mins / 60);
+  if (hrs < 24) return `il y a ${hrs}h`;
+  return `il y a ${Math.floor(hrs / 24)}j`;
+}
+
+function PipelineIndicator({ lead }: { lead: Lead }) {
+  const steps = [
+    { done: true },
+    { done: lead.score_global != null },
+    { done: lead.landing_url != null },
+    { done: lead.whatsapp_message != null },
+    { done: SENT_STATUSES.includes(lead.status ?? "") },
+  ];
+  return (
+    <div className="flex items-center gap-0.5" title="Scraped → Audité → Hero → Message → Envoyé">
+      {steps.map((s, i) => (
+        <div
+          key={i}
+          className={`h-1.5 w-5 rounded-full transition-colors ${
+            s.done ? "bg-green-500" : "bg-muted"
+          }`}
+        />
+      ))}
+    </div>
+  );
 }
 
 export type Lead = {
@@ -70,6 +115,7 @@ export type Lead = {
   whatsapp_message: string | null;
   build_prompt: string | null;
   status: string | null;
+  created_at?: string | null;
 };
 
 function ScoreBadge({ score }: { score: number | null }) {
@@ -274,15 +320,18 @@ export function LeadsTable({ leads }: { leads: Lead[] }) {
   const [shots, setShots] = useState<Record<string, string>>({});
   const [comparingId, setComparingId] = useState<string | null>(null);
   const [comparisons, setComparisons] = useState<Record<string, string>>({});
-  const [activeTab, setActiveTab] = useState<Tab>("tous");
+  const [activeTab, setActiveTab] = useState<Tab>("recents");
 
   const tabCounts = useMemo(() => ({
-    tous:     leads.length,
-    nouveaux: leads.filter((l) => l.score_global == null).length,
-    audites:  leads.filter((l) => l.score_global != null).length,
-    heroes:   leads.filter((l) => l.landing_url != null).length,
-    messages: leads.filter((l) => l.whatsapp_message != null).length,
-    envoyes:  leads.filter((l) => SENT_STATUSES.includes(l.status ?? "")).length,
+    recents:   leads.filter(isRecent).length,
+    a_traiter: leads.filter(
+      (l) => l.whatsapp_message == null && !SENT_STATUSES.includes(l.status ?? "")
+    ).length,
+    prets:     leads.filter(
+      (l) => l.whatsapp_message != null && !SENT_STATUSES.includes(l.status ?? "")
+    ).length,
+    envoyes:   leads.filter((l) => SENT_STATUSES.includes(l.status ?? "")).length,
+    tous:      leads.length,
   }), [leads]);
 
   const filteredLeads = useMemo(() => filterLeads(leads, activeTab), [leads, activeTab]);
@@ -434,13 +483,26 @@ export function LeadsTable({ leads }: { leads: Lead[] }) {
             >
               {/* En-tête */}
               <div className="flex flex-wrap items-start justify-between gap-3">
-                <div className="min-w-0">
+                <div className="min-w-0 flex-1">
                   <div className="flex flex-wrap items-center gap-2">
                     <h3 className="font-bold">{l.nom}</h3>
                     <ScoreBadge score={l.score_global} />
-                    {l.status && (
+                    {isNew(l) && (
+                      <span className="rounded-full bg-primary px-2 py-0.5 text-xs font-bold text-primary-foreground">
+                        NOUVEAU
+                      </span>
+                    )}
+                    {l.status && !isNew(l) && (
                       <span className="rounded-full bg-accent px-2.5 py-0.5 text-xs font-medium text-accent-foreground">
                         {l.status}
+                      </span>
+                    )}
+                  </div>
+                  <div className="mt-1.5 flex flex-wrap items-center gap-3">
+                    <PipelineIndicator lead={l} />
+                    {l.created_at && (
+                      <span className="text-xs text-muted-foreground">
+                        {relativeTime(l.created_at)}
                       </span>
                     )}
                   </div>

@@ -7,6 +7,7 @@ export type AutomationLog = {
   ts: string;
   msg: string;
   level: "info" | "ok" | "error";
+  url?: string;
 };
 
 export type AutomationState = {
@@ -46,7 +47,8 @@ export async function updateState(patch: Partial<AutomationState>): Promise<void
 
 export async function addLog(
   msg: string,
-  level: AutomationLog["level"] = "info"
+  level: AutomationLog["level"] = "info",
+  url?: string
 ): Promise<void> {
   if (!supabaseAdmin) return;
   const { data } = await supabaseAdmin
@@ -55,7 +57,7 @@ export async function addLog(
     .eq("id", 1)
     .maybeSingle();
   const prev: AutomationLog[] = (data as { log: AutomationLog[] } | null)?.log ?? [];
-  const entry: AutomationLog = { ts: new Date().toISOString(), msg, level };
+  const entry: AutomationLog = { ts: new Date().toISOString(), msg, level, ...(url ? { url } : {}) };
   const log = [entry, ...prev].slice(0, 40);
   await supabaseAdmin.from("automation_state").update({ log }).eq("id", 1);
 }

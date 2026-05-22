@@ -16,11 +16,13 @@ export async function POST(req: Request) {
     ville,
     pays = "Cameroun",
     calendlyUrl = "https://calendly.com/kountchouryan/30min",
+    batchSize = 5,
   } = body as {
     serviceType?: string;
     ville?: string;
     pays?: string;
     calendlyUrl?: string;
+    batchSize?: number;
   };
 
   if (!serviceType)
@@ -43,7 +45,7 @@ export async function POST(req: Request) {
     current_keyword: null,
     scrape_run_id: null,
     calendly_url: calendlyUrl,
-    batch_size: 5,
+    batch_size: Math.min(Math.max(1, Math.floor(batchSize)), 50),
     leads_processed: 0,
     last_batch_at: null,
     started_at: null,
