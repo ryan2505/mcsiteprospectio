@@ -27,68 +27,64 @@ export type MessageOptions = {
   comparisonUrl?: string;
 };
 
-const MESSAGE_PROMPT = (lead: LeadForMessage, opts?: MessageOptions) => {
-  const hasExtra = opts?.previewUrl || opts?.calendlyUrl;
+const MESSAGE_PROMPT = (lead: LeadForMessage, opts?: MessageOptions): string => {
   const majorProblem = lead.problemes?.[0] ?? lead.angle_pitch ?? "site web à moderniser";
+  const calendlyUrl = opts?.calendlyUrl?.trim() || null;
+  const previewUrl  = opts?.previewUrl?.trim()  || null;
+  const comparisonUrl = opts?.comparisonUrl?.trim() || null;
 
-  if (hasExtra) {
-    return `Tu es expert en prospection WhatsApp pour le marché africain francophone.
+  // Numérotation dynamique des étapes selon les URLs disponibles
+  let stepNum = 4;
+  const stepPreview   = previewUrl   ? `${++stepNum}. [OBLIGATOIRE] Inclus ce lien aperçu tel quel dans le texte : ${previewUrl}` : null;
+  const stepCalendly  = calendlyUrl  ? `${++stepNum}. [OBLIGATOIRE] Propose un appel de 30 min sans engagement et inclus ce lien tel quel : ${calendlyUrl}` : null;
+  const closingStep   = `${++stepNum}. Termine par une question fermée courte.`;
+  const closingExample = calendlyUrl || previewUrl ? "Ça vous intéresse ?" : "Je peux vous la montrer ?";
 
-Contexte sur le prospect :
-- Établissement : ${lead.nom}
-- Type : ${lead.type_business ?? "commerce local"}
-- Ville : ${lead.ville ?? ""}
-- Score actuel du site : ${lead.score_global ?? "?"}/100
-- Problème principal : ${majorProblem}
-- Note Google : ${lead.note_google ?? "?"}/5 (${lead.nb_avis ?? 0} avis)
-${opts?.comparisonUrl ? `- Image comparaison AVANT/APRÈS (à joindre en pièce jointe) : ${opts.comparisonUrl}` : ""}
-${opts?.previewUrl ? `- Lien aperçu du nouveau site : ${opts.previewUrl}` : ""}
-${opts?.calendlyUrl ? `- Lien prise de RDV : ${opts.calendlyUrl}` : ""}
+  const steps = [
+    `1. Commence par "Bonjour l'équipe de ${lead.nom}".`,
+    "2. Cite UN détail précis qui prouve qu'on a étudié leur établissement (note Google, ville, type de business, problème identifié).",
+    "3. Formule UN constat factuel sur leur site actuel — neutre, jamais accusateur.",
+    `4. [OBLIGATOIRE] Annonce qu'on a déjà préparé leur nouveau site GRATUITEMENT et qu'on joint la comparaison AVANT/APRÈS en pièce jointe image.`,
+    stepPreview,
+    stepCalendly,
+    closingStep,
+  ]
+    .filter(Boolean)
+    .join("\n");
 
-Rédige un message WhatsApp en français qui :
-1. Commence par "Bonjour l'équipe de ${lead.nom}".
-2. Mentionne UN détail spécifique (note Google, type d'établissement, etc.).
-3. Pose UN constat factuel sur leur site — problème précis, sans accuser.
-4. Annonce qu'on a préparé leur nouvelle page web GRATUITEMENT et qu'on leur envoie la comparaison AVANT/APRÈS en image${opts?.previewUrl ? ` + lien : ${opts.previewUrl}` : ""}.
-5. Propose un call de 30 min sans engagement${opts?.calendlyUrl ? ` : ${opts.calendlyUrl}` : ""}.
-6. Termine par une question courte ("Ça vous intéresse ?").
-
-Règles STRICTES :
-- 110 mots MAXIMUM.
-- Vouvoiement par défaut ; tutoiement seulement si type = lounge/bar.
-- 1 emoji maximum, naturel.
-- INTERDITS : "optimisation", "conversion", "ROI", "doublez vos ventes", "j'espère".
-- Inclus les liens tels quels dans le texte (ne les reformule pas).
-- Mentionne explicitement qu'une image comparaison AVANT/APRÈS est jointe.
-
-Renvoie UNIQUEMENT le texte du message, rien d'autre.`;
-  }
+  const contextLines = [
+    comparisonUrl ? `- Comparaison AVANT/APRÈS (image à joindre en pièce jointe) : ${comparisonUrl}` : null,
+    previewUrl    ? `- Lien aperçu du nouveau site : ${previewUrl}`    : null,
+    calendlyUrl   ? `- Lien réservation appel : ${calendlyUrl}`        : null,
+  ]
+    .filter(Boolean)
+    .join("\n");
 
   return `Tu es expert en prospection WhatsApp pour le marché africain francophone.
 
 Contexte sur le prospect :
 - Établissement : ${lead.nom}
 - Type : ${lead.type_business ?? "commerce local"}
-- Ville : ${lead.ville ?? ""}
-- Score actuel du site : ${lead.score_global ?? "?"}/100
-- Problème principal / angle : ${majorProblem}
+- Ville : ${lead.ville ?? "non précisée"}
+- Score actuel du site web : ${lead.score_global ?? "?"}/100
+- Problème principal identifié : ${majorProblem}
 - Note Google : ${lead.note_google ?? "?"}/5 (${lead.nb_avis ?? 0} avis)
+${contextLines}
 
-Rédige un message WhatsApp en français qui :
-1. Commence par "Bonjour l'équipe de ${lead.nom}".
-2. Mentionne UN détail spécifique prouvant qu'on a regardé leur établissement.
-3. Pose UN constat factuel (pas accusateur) sur leur site actuel.
-4. Annonce qu'on a déjà préparé une version améliorée, GRATUITE à voir.
-5. Termine par UNE question fermée simple ("Je peux vous la montrer ?").
+STRUCTURE OBLIGATOIRE du message (respecte cet ordre) :
+${steps}
 
-Règles STRICTES :
-- 70 mots MAXIMUM.
-- Vouvoiement par défaut ; tutoiement seulement si type = lounge/bar.
-- 1 emoji maximum, naturel. Pas d'emoji corporate.
-- INTERDITS : "optimisation", "conversion", "ROI", "doublez vos ventes", "j'espère que vous allez bien".
-- Pas de promesse magique.
+Exemple de question finale : "${closingExample}"
 
-Renvoie UNIQUEMENT le texte du message, rien d'autre (pas de guillemets autour, pas d'explication).`;
+RÈGLES STRICTES :
+- 120 mots MAXIMUM.
+- Vouvoiement par défaut ; tutoiement uniquement si type = lounge / bar / boîte de nuit.
+- 1 seul emoji, en tout début de message.
+- INTERDITS absolus : "optimisation", "conversion", "ROI", "doublez vos ventes", "j'espère que vous allez bien", "n'hésitez pas".
+- Les liens doivent apparaître tels quels dans le texte — ne les reformule pas, ne les raccourcis pas.
+- Pas de promesse magique ni de superlatif creux.
+
+Renvoie UNIQUEMENT le texte du message, sans guillemets autour, sans explication, sans signature.`;
 };
 
 export async function generateWhatsAppMessage(
@@ -108,7 +104,7 @@ export async function generateWhatsAppMessage(
     },
     body: JSON.stringify({
       model: ANTHROPIC_MODEL,
-      max_tokens: 512,
+      max_tokens: 600,
       messages: [{ role: "user", content: MESSAGE_PROMPT(lead, opts) }],
     }),
   });
